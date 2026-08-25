@@ -1,0 +1,51 @@
+{
+  "name": "opencode-jarvis",
+  "version": "0.1.0",
+  "description": "JARVIS-style voice and TUI plugin for OpenCode",
+  "keywords": [
+    "opencode",
+    "plugin",
+    "jarvis",
+    "voice",
+    "tui"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "opencode": ">=1.18.22"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.ts",
+      "import": "./dist/tui.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/tui.ts --format esm --dts --clean --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "1.18.22",
+    "@opencode-ai/sdk": "1.18.22"
+  },
+  "devDependencies": {
+    "@opentui/core": "0.4.5",
+    "@opentui/keymap": "0.4.5",
+    "@opentui/solid": "0.4.5",
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.4"
+  }
+}
