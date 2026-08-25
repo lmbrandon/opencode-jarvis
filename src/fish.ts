@@ -7,6 +7,7 @@ type Fetcher = typeof fetch;
 const CREDIT_URL = "https://api.fish.audio/wallet/self/api-credit";
 const TTS_URL = "https://api.fish.audio/v1/tts";
 const MAX_ERROR_MESSAGE_LENGTH = 300;
+const MAX_ERROR_BODY_BYTES = 1_200;
 
 export class FishAudioError extends Error {
   constructor(
@@ -28,7 +29,13 @@ export class FishAudioClient {
       ...(signal ? { signal } : {}),
     });
 
-    return response.ok;
+    if (response.ok) return true;
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel().catch(() => undefined);
+      return false;
+    }
+
+    throw await fishAudioError(response, apiKey);
   }
 
   async synthesize(
@@ -52,17 +59,59 @@ export class FishAudioClient {
     });
 
     if (!response.ok) {
-      const detail = await response
-        .text()
-        .catch(() => "Fish Audio returned an unreadable error response");
-      const redacted = apiKey ? detail.split(apiKey).join("[redacted]") : detail;
-      const safeDetail = redacted.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
-      const message = `Fish Audio request failed (${response.status})${
-        safeDetail ? `: ${safeDetail}` : ""
-      }`.slice(0, MAX_ERROR_MESSAGE_LENGTH);
-      throw new FishAudioError(response.status, message);
+      throw await fishAudioError(response, apiKey);
     }
 
     return new Uint8Array(await response.arrayBuffer());
   }
+}
+
+async function fishAudioError(
+  response: Response,
+  apiKey: string,
+): Promise<FishAudioError> {
+  const detail = await readBoundedErrorBody(response, apiKey);
+  const safeDetail = detail.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  const message = `Fish Audio request failed (${response.status})${
+    safeDetail ? `: ${safeDetail}` : ""
+  }`.slice(0, MAX_ERROR_MESSAGE_LENGTH);
+  return new FishAudioError(response.status, message);
+}
+
+async function readBoundedErrorBody(
+  response: Response,
+  apiKey: string,
+): Promise<string> {
+  if (!response.body) return "";
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+
+  try {
+    while (byteLength < MAX_ERROR_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const remaining = MAX_ERROR_BODY_BYTES - byteLength;
+      const chunk = value.subarray(0, remaining);
+      chunks.push(chunk);
+      byteLength += chunk.byteLength;
+    }
+  } catch {
+    return "Fish Audio returned an unreadable error response";
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  const detail = new TextDecoder().decode(bytes);
+  return apiKey ? detail.split(apiKey).join("[redacted]") : detail;
 }

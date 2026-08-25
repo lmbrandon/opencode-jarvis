@@ -28,15 +28,38 @@ describe("FishAudioClient", () => {
     );
   });
 
-  test("returns false when the credit endpoint rejects a key", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(new Response("unauthorized", { status: 401 }));
+  test.each([401, 403])(
+    "returns false when the credit endpoint rejects a key with %i",
+    async (status) => {
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("unauthorized", { status }));
 
-    await expect(
-      new FishAudioClient(fetcher).validateKey("bad-key"),
-    ).resolves.toBe(false);
-  });
+      await expect(
+        new FishAudioClient(fetcher).validateKey("bad-key"),
+      ).resolves.toBe(false);
+    },
+  );
+
+  test.each([429, 500, 503])(
+    "throws a sanitized service error when key validation returns %i",
+    async (status) => {
+      const apiKey = "validation-secret-never-expose";
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          new Response(`service unavailable for ${apiKey}`, { status }),
+        );
+
+      const error = await new FishAudioClient(fetcher)
+        .validateKey(apiKey)
+        .catch((reason: unknown) => reason);
+
+      expect(error).toBeInstanceOf(FishAudioError);
+      expect(error).toMatchObject({ status });
+      expect((error as Error).message).not.toContain(apiKey);
+    },
+  );
 
   test("sends the exact pinned TTS request and returns binary audio", async () => {
     const audio = new Uint8Array([0, 1, 127, 128, 255]);
@@ -72,12 +95,28 @@ describe("FishAudioClient", () => {
     expect(FISH_FORMAT).toBe("mp3");
   });
 
-  test("throws a typed bounded error without exposing the API key", async () => {
+  test("bounds and cancels an oversized error body without exposing the API key", async () => {
     const apiKey = "fish-secret-never-expose";
-    const responseMessage = `invalid ${apiKey}\n${"x".repeat(1_000)}`;
+    const encoder = new TextEncoder();
+    let pulledChunks = 0;
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulledChunks += 1;
+        if (pulledChunks > 100) {
+          controller.close();
+          return;
+        }
+        const prefix = pulledChunks === 1 ? `invalid ${apiKey}\n` : "";
+        controller.enqueue(encoder.encode(`${prefix}${"x".repeat(128)}`));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValue(new Response(responseMessage, { status: 429 }));
+      .mockResolvedValue(new Response(body, { status: 429 }));
 
     const error = await new FishAudioClient(fetcher)
       .synthesize(apiKey, "Hello")
@@ -87,6 +126,8 @@ describe("FishAudioClient", () => {
     expect(error).toMatchObject({ status: 429 });
     expect((error as Error).message.length).toBeLessThanOrEqual(300);
     expect((error as Error).message).not.toContain(apiKey);
+    expect(pulledChunks).toBeLessThan(100);
+    expect(canceled).toBe(true);
   });
 });
 
