@@ -214,7 +214,7 @@ The repository publishes one package, `opencode-jarvis`. Its package exports map
 
 The package uses declaration files and an npm `files` allowlist. Package metadata will make the repository suitable for GitHub and npm publication.
 
-Local development configuration will use two absolute `file://` entries pointing to the built server and TUI modules because raw file entries do not have npm export metadata. Production configuration uses the single npm package name `opencode-jarvis`. The implementation and README will not overwrite or silently modify the existing project or global OpenCode configuration.
+Local development configuration uses one absolute `file://` entry pointing to the built package directory, whose `package.json` exposes both modules. Production configuration uses the single npm package name `opencode-jarvis`. The implementation and README will not overwrite or silently modify the existing project or global OpenCode configuration.
 
 ## Verification Strategy
 
@@ -245,7 +245,7 @@ Fish network calls and audio-player processes are mocked in tests. No test uses 
 
 A README smoke-test checklist covers behavior that requires a live OpenCode TUI:
 
-1. Start OpenCode with both local plugin entries.
+1. Start OpenCode with the local package directory entry.
 2. Supply `FISH_API_KEY` or complete the startup prompt.
 3. Run `/jarvis-status` and confirm off.
 4. Run `/jarvis` and confirm the toast and greeting.
