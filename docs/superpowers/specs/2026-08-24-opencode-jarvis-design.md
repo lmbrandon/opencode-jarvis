@@ -39,8 +39,7 @@ The design relies on the following APIs present in OpenCode 1.18.22:
 - TUI plugin `api.state.session` and `api.state.part` for completed response text.
 - TUI plugin `api.lifecycle.onDispose` for cleanup.
 - Server plugin `experimental.chat.system.transform` for conditional system instruction injection.
-- Server plugin event and tool lifecycle data only for observation; permissions are never changed.
-- SDK path information and the TUI state path for locating shared runtime state.
+- SDK `client.path.get` and the TUI state path for locating shared runtime state.
 
 OpenCode 1.18.22 defines TUI and server plugins as mutually exclusive module types. It does not expose a direct shared state channel between those plugin runtimes, so the implementation uses two publishable entry points and a small state file.
 
