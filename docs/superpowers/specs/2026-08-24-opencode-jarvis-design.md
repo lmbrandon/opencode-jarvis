@@ -41,7 +41,7 @@ The design relies on the following APIs present in OpenCode 1.18.22:
 - Server plugin `experimental.chat.system.transform` for conditional system instruction injection.
 - SDK `client.path.get` and the TUI state path for locating shared runtime state.
 
-OpenCode 1.18.22 defines TUI and server plugins as mutually exclusive module types. It does not expose a direct shared state channel between those plugin runtimes, so the implementation uses two publishable entry points and a small state file.
+OpenCode 1.18.22 defines TUI and server plugins as mutually exclusive module types. One npm package may expose the server module at `.` and the TUI module at `./tui`, which OpenCode loads into the appropriate runtimes. OpenCode does not expose a direct shared state channel between those runtimes, so the implementation uses two module entry points and a small state file.
 
 ## Native Command Limitation
 
@@ -58,11 +58,11 @@ All four execute locally and do not initiate an LLM request. The README will doc
 
 ## Architecture
 
-The repository contains two npm packages because OpenCode requires distinct TUI and server plugin modules.
+The repository contains one npm package with distinct TUI and server plugin modules.
 
 ### TUI Controller Package
 
-The root package, `opencode-jarvis`, remains active for the lifetime of the TUI. It owns:
+The `opencode-jarvis/tui` entry point remains active for the lifetime of the TUI. It owns:
 
 - Native commands and status toasts.
 - Fish API-key acquisition and validation.
@@ -77,7 +77,7 @@ The controller remains loaded when Jarvis is off so users can enable it again.
 
 ### Server Engine Package
 
-The companion package, `opencode-jarvis-engine`, owns only conditional prompt injection. On every `experimental.chat.system.transform` call, it reads the current session's state. If enabled, it appends the Jarvis instruction from the dedicated prompt module. If disabled or if no session ID is available, it returns without changing the system array.
+The package's root `opencode-jarvis` entry point owns only conditional prompt injection. On every `experimental.chat.system.transform` call, it reads the current session's state. If enabled, it appends the Jarvis instruction from the dedicated prompt module. If disabled or if no session ID is available, it returns without changing the system array.
 
 The engine does not alter user prompts, tools, tool arguments, permissions, provider parameters, or any other OpenCode behavior.
 
@@ -181,17 +181,16 @@ These failures must never reject or cancel the user's OpenCode response, delay o
 
 ```text
 src/
+  index.ts
+  tui.ts
   controller.ts
+  engine.ts
   state.ts
   prompt.ts
   cues.ts
   fish.ts
   cache.ts
   voice.ts
-packages/
-  engine/
-    src/index.ts
-    package.json
 tests/
   controller.test.ts
   state.test.ts
@@ -207,18 +206,15 @@ package.json
 tsconfig.json
 ```
 
-The build may add a minimal bundler configuration if needed to produce two standalone ESM package outputs.
+The build may add a minimal bundler configuration if needed to produce the two standalone ESM module outputs.
 
 ## Packaging And Installation
 
-The root is an npm workspace containing two publishable packages:
+The repository publishes one package, `opencode-jarvis`. Its package exports map `.` to the built server entry point and `./tui` to the built TUI entry point. OpenCode 1.18.22 discovers the TUI export automatically when the npm package is configured.
 
-- `opencode-jarvis` for the TUI plugin.
-- `opencode-jarvis-engine` for the server plugin.
+The package uses declaration files and an npm `files` allowlist. Package metadata will make the repository suitable for GitHub and npm publication.
 
-Both packages use explicit `exports`, declaration files, and npm `files` allowlists. Package metadata will make the repository suitable for GitHub and npm publication.
-
-Local development configuration will use two absolute `file://` entries pointing to the built controller and engine modules. Production configuration will use both npm package names. The implementation and README will not overwrite or silently modify the existing project or global OpenCode configuration.
+Local development configuration will use two absolute `file://` entries pointing to the built server and TUI modules because raw file entries do not have npm export metadata. Production configuration uses the single npm package name `opencode-jarvis`. The implementation and README will not overwrite or silently modify the existing project or global OpenCode configuration.
 
 ## Verification Strategy
 
@@ -273,7 +269,7 @@ A README smoke-test checklist covers behavior that requires a live OpenCode TUI:
 
 The first version is complete when:
 
-- Both plugin packages build and load on OpenCode 1.18.22.
+- Both plugin module entry points build and load from the `opencode-jarvis` package on OpenCode 1.18.22.
 - Native Jarvis commands work without an LLM request.
 - State is session-specific and defaults off.
 - Disabled sessions experience no prompt, tool, permission, Fish, or audio changes.
