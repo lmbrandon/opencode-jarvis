@@ -294,11 +294,13 @@ describe("production ffplay playback", () => {
       { stdio: "ignore" },
     )
     child.emit("exit", 0, null)
+    child.emit("close", 0, null)
     await voice.whenIdle()
 
     expect(report).not.toHaveBeenCalled()
     expect(child.listenerCount("error")).toBe(0)
     expect(child.listenerCount("exit")).toBe(0)
+    expect(child.listenerCount("close")).toBe(0)
     await expect(access(file)).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
@@ -316,12 +318,38 @@ describe("production ffplay playback", () => {
     voice.cancelSession("a")
     await voice.whenIdle()
     child.emit("exit", 1, null)
+    child.emit("close", 1, null)
 
     expect(child.kill).toHaveBeenCalledOnce()
     expect(report).not.toHaveBeenCalled()
     expect(child.listenerCount("error")).toBe(0)
     expect(child.listenerCount("exit")).toBe(0)
+    expect(child.listenerCount("close")).toBe(0)
     await expect(access(file)).rejects.toThrow()
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it("guards child errors emitted after abort until the process exits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
+    const child = fakeChildProcess()
+    spawnMock.mockReturnValue(child)
+    const report = vi.fn()
+    const voice = defaultPlayerVoice(root, report)
+    voice.speakReply("a", "hello")
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
+
+    voice.cancelSession("a")
+    expect(() => child.emit("error", new Error("kill failed"))).not.toThrow()
+    child.emit("exit", null, "SIGTERM")
+    expect(() => child.emit("error", new Error("late kill error"))).not.toThrow()
+    child.emit("close", null, "SIGTERM")
+    await voice.whenIdle()
+
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(report).not.toHaveBeenCalled()
+    expect(child.listenerCount("error")).toBe(0)
+    expect(child.listenerCount("exit")).toBe(0)
+    expect(child.listenerCount("close")).toBe(0)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -338,12 +366,14 @@ describe("production ffplay playback", () => {
 
     child.emit("error", error)
     child.emit("exit", 1, null)
+    child.emit("close", 1, null)
     await voice.whenIdle()
 
     expect(report).toHaveBeenCalledOnce()
     expect(report).toHaveBeenCalledWith(error)
     expect(child.listenerCount("error")).toBe(0)
     expect(child.listenerCount("exit")).toBe(0)
+    expect(child.listenerCount("close")).toBe(0)
     await expect(access(file)).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
@@ -359,6 +389,7 @@ describe("production ffplay playback", () => {
     const file = spawnMock.mock.calls[0]![1][4] as string
 
     child.emit("exit", 7, null)
+    child.emit("close", 7, null)
     await voice.whenIdle()
 
     expect(report).toHaveBeenCalledWith(

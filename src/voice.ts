@@ -185,15 +185,15 @@ async function playWithFfplay(
     );
     let settled = false;
 
-    const cleanup = (): void => {
-      signal.removeEventListener("abort", onAbort);
+    const cleanupChild = (): void => {
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
+      child.removeListener("close", onClose);
     };
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
-      cleanup();
+      signal.removeEventListener("abort", onAbort);
       if (error) reject(error);
       else resolve();
     };
@@ -208,9 +208,14 @@ async function playWithFfplay(
       if (code === 0) finish();
       else finish(new Error(`ffplay exited with code ${String(code)}`));
     };
+    const onClose = (code: number | null): void => {
+      onExit(code);
+      cleanupChild();
+    };
 
-    child.once("error", onError);
+    child.on("error", onError);
     child.once("exit", onExit);
+    child.once("close", onClose);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
   });
