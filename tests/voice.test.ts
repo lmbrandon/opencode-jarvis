@@ -396,22 +396,31 @@ describe("production ffplay playback", () => {
     voice.speakReply("a", "active")
     voice.speakReply("a", "queued")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
+    vi.useFakeTimers()
 
-    const disposePromise = voice.dispose()
-    child.emit("exit", null, "SIGTERM")
-    const disposeBeforeClose = await Promise.race([
-      disposePromise.then(() => "disposed" as const),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 100)),
-    ])
+    try {
+      const disposePromise = voice.dispose()
+      child.emit("exit", null, "SIGTERM")
+      await vi.runAllTimersAsync()
+      const remainingTimers = vi.getTimerCount()
+      vi.useRealTimers()
+      const disposeBeforeClose = await Promise.race([
+        disposePromise.then(() => "disposed" as const),
+        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 100)),
+      ])
 
-    child.emit("close", null, "SIGTERM")
-    await disposePromise
+      child.emit("close", null, "SIGKILL")
+      await disposePromise
 
-    expect(disposeBeforeClose).toBe("pending")
-    expect(spawnMock).toHaveBeenCalledOnce()
-    expect(child.kill).toHaveBeenCalledOnce()
-    expect(report).not.toHaveBeenCalled()
-    await rm(root, { recursive: true, force: true })
+      expect(disposeBeforeClose).toBe("pending")
+      expect(remainingTimers).toBe(0)
+      expect(spawnMock).toHaveBeenCalledOnce()
+      expect(child.kill.mock.calls.map((call) => call[0])).toEqual([undefined, "SIGKILL"])
+      expect(report).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it("escalates an aborted ffplay process from SIGTERM to SIGKILL", async () => {
@@ -442,32 +451,45 @@ describe("production ffplay playback", () => {
     }
   })
 
-  it("settles aborted playback after a bounded wait when ffplay never closes", async () => {
+  it("keeps aborted playback serialized after all timers until ffplay closes", async () => {
     const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
     const child = fakeChildProcess()
-    spawnMock.mockReturnValue(child)
+    const nextChild = fakeChildProcess()
+    spawnMock.mockReturnValueOnce(child).mockReturnValueOnce(nextChild)
     const report = vi.fn()
     const voice = defaultPlayerVoice(root, report)
-    voice.speakReply("a", "hello")
+    voice.speakReply("a", "first")
+    voice.speakReply("b", "second")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
+    const file = spawnMock.mock.calls[0]![1][4] as string
     vi.useFakeTimers()
 
     try {
       voice.cancelSession("a")
       const idlePromise = voice.whenIdle()
+      let idle = false
+      void idlePromise.then(() => { idle = true })
       await vi.runAllTimersAsync()
       const remainingTimers = vi.getTimerCount()
       vi.useRealTimers()
-      const boundedResult = await Promise.race([
-        idlePromise.then(() => "settled" as const),
+      const progressBeforeClose = await Promise.race([
+        vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2)).then(() => "advanced" as const),
         new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 100)),
       ])
+      const idleBeforeClose = idle
+      let temporaryFileExistsBeforeClose = true
+      await access(file).catch(() => { temporaryFileExistsBeforeClose = false })
 
       expect(() => child.emit("error", new Error("late kill error"))).not.toThrow()
       child.emit("close", null, "SIGKILL")
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2))
+      nextChild.emit("exit", 0, null)
+      nextChild.emit("close", 0, null)
       await idlePromise
 
-      expect(boundedResult).toBe("settled")
+      expect(progressBeforeClose).toBe("pending")
+      expect(idleBeforeClose).toBe(false)
+      expect(temporaryFileExistsBeforeClose).toBe(true)
       expect(remainingTimers).toBe(0)
       expect(report).not.toHaveBeenCalled()
       expect(child.listenerCount("error")).toBe(0)
@@ -478,7 +500,7 @@ describe("production ffplay playback", () => {
     }
   })
 
-  it("does not schedule fallback after SIGKILL synchronously closes ffplay", async () => {
+  it("cleans termination state when SIGKILL synchronously closes ffplay", async () => {
     const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
     const child = fakeChildProcess()
     child.kill.mockImplementation((signal?: string) => {

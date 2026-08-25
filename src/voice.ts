@@ -7,7 +7,6 @@ import { AudioCache } from "./cache.js";
 import { FishAudioClient } from "./fish.js";
 
 const FFPLAY_TERMINATE_GRACE_MS = 250;
-const FFPLAY_FORCE_KILL_GRACE_MS = 250;
 
 export interface VoiceJob {
   sessionID: string;
@@ -190,11 +189,9 @@ async function playWithFfplay(
     let aborted = false;
     let failure: Error | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
-    let finalSettlementTimer: NodeJS.Timeout | undefined;
 
     const cleanupChild = (): void => {
       if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (finalSettlementTimer) clearTimeout(finalSettlementTimer);
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
       child.removeListener("close", onClose);
@@ -217,12 +214,6 @@ async function playWithFfplay(
         try {
           child.kill("SIGKILL");
         } catch {}
-        if (settled) return;
-        finalSettlementTimer = setTimeout(() => {
-          child.removeListener("exit", onExit);
-          finish();
-        }, FFPLAY_FORCE_KILL_GRACE_MS);
-        finalSettlementTimer.unref();
       }, FFPLAY_TERMINATE_GRACE_MS);
       forceKillTimer.unref();
     };
