@@ -1,4 +1,15 @@
-import { mkdtemp, readFile, readdir, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import {
+  mkdir,
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -49,6 +60,30 @@ describe("SessionStateStore", () => {
     await expect(store.isEnabled("session-a")).resolves.toBe(false);
   });
 
+  test.each([
+    [
+      "setEnabled",
+      (store: SessionStateStore) => store.setEnabled("session-a", true),
+    ],
+    ["toggle", (store: SessionStateStore) => store.toggle("session-a")],
+  ])(
+    "%s rejects operational read errors while reads fail closed",
+    async (_method, mutate) => {
+      const stateRoot = await createStateRoot();
+      const stateDirectory = join(stateRoot, "opencode-jarvis");
+      const invalidTarget = join(stateRoot, "invalid-state-target");
+      const stateFile = join(stateDirectory, "state.json");
+      await mkdir(stateDirectory, { recursive: true });
+      await mkdir(invalidTarget);
+      await symlink(invalidTarget, stateFile, "dir");
+      const store = new SessionStateStore(stateRoot);
+
+      await expect(store.isEnabled("session-a")).resolves.toBe(false);
+      await expect(mutate(store)).rejects.toMatchObject({ code: "EISDIR" });
+      expect((await lstat(stateFile)).isSymbolicLink()).toBe(true);
+    },
+  );
+
   test("serializes rapid mutations and readers wait for pending writes", async () => {
     const stateRoot = await createStateRoot();
     const store = new SessionStateStore(stateRoot);
@@ -76,6 +111,51 @@ describe("SessionStateStore", () => {
     await expect(readdir(join(stateRoot, "opencode-jarvis"))).resolves.toEqual([
       "state.json",
     ]);
+  });
+
+  test("serializes mutations across store instances", async () => {
+    const stateRoot = await createStateRoot();
+    const firstStore = new SessionStateStore(stateRoot);
+    const secondStore = new SessionStateStore(stateRoot);
+
+    await Promise.all([
+      firstStore.setEnabled("session-a", true),
+      secondStore.setEnabled("session-b", true),
+    ]);
+
+    const reader = new SessionStateStore(stateRoot);
+    await expect(
+      Promise.all([
+        reader.isEnabled("session-a"),
+        reader.isEnabled("session-b"),
+      ]),
+    ).resolves.toEqual([true, true]);
+  });
+
+  test("gives up after a bounded wait when the mutation lock stays active", async () => {
+    const stateRoot = await createStateRoot();
+    const stateDirectory = join(stateRoot, "opencode-jarvis");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(join(stateDirectory, "state.lock"), "active", "utf8");
+    const store = new SessionStateStore(stateRoot);
+
+    await expect(store.setEnabled("session-a", true)).rejects.toThrow(
+      "Timed out waiting for state lock",
+    );
+  });
+
+  test("recovers a stale mutation lock", async () => {
+    const stateRoot = await createStateRoot();
+    const stateDirectory = join(stateRoot, "opencode-jarvis");
+    const lockFile = join(stateDirectory, "state.lock");
+    await mkdir(stateDirectory, { recursive: true });
+    await writeFile(lockFile, "abandoned", "utf8");
+    const staleTime = new Date(Date.now() - 60_000);
+    await utimes(lockFile, staleTime, staleTime);
+    const store = new SessionStateStore(stateRoot);
+
+    await expect(store.setEnabled("session-a", true)).resolves.toBe(true);
+    await expect(stat(lockFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("preserves only session entries whose value is exactly true", async () => {
