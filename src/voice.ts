@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { AudioCache } from "./cache.js";
 import { FishAudioClient } from "./fish.js";
 
+const FFPLAY_TERMINATE_GRACE_MS = 250;
+const FFPLAY_FORCE_KILL_GRACE_MS = 250;
+
 export interface VoiceJob {
   sessionID: string;
   text: string;
@@ -13,7 +16,7 @@ export interface VoiceJob {
 }
 
 type VoiceWorker = (job: VoiceJob, signal: AbortSignal) => Promise<void>;
-type ErrorReporter = (error: unknown) => void;
+type ErrorReporter = (error: unknown) => void | Promise<void>;
 
 export class VoiceQueue {
   private readonly jobs: VoiceJob[] = [];
@@ -65,7 +68,7 @@ export class VoiceQueue {
       } catch (error) {
         if (!controller.signal.aborted) {
           try {
-            this.report(error);
+            void Promise.resolve(this.report(error)).catch(() => undefined);
           } catch {}
         }
       } finally {
@@ -184,8 +187,14 @@ async function playWithFfplay(
       { stdio: "ignore" },
     );
     let settled = false;
+    let aborted = false;
+    let failure: Error | undefined;
+    let forceKillTimer: NodeJS.Timeout | undefined;
+    let finalSettlementTimer: NodeJS.Timeout | undefined;
 
     const cleanupChild = (): void => {
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (finalSettlementTimer) clearTimeout(finalSettlementTimer);
       child.removeListener("error", onError);
       child.removeListener("exit", onExit);
       child.removeListener("close", onClose);
@@ -198,18 +207,36 @@ async function playWithFfplay(
       else resolve();
     };
     const onAbort = (): void => {
-      finish();
+      aborted = true;
+      signal.removeEventListener("abort", onAbort);
       try {
         child.kill();
       } catch {}
+      if (settled) return;
+      forceKillTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+        if (settled) return;
+        finalSettlementTimer = setTimeout(() => {
+          child.removeListener("exit", onExit);
+          finish();
+        }, FFPLAY_FORCE_KILL_GRACE_MS);
+        finalSettlementTimer.unref();
+      }, FFPLAY_TERMINATE_GRACE_MS);
+      forceKillTimer.unref();
     };
-    const onError = (error: Error): void => finish(error);
+    const onError = (error: Error): void => {
+      if (!aborted) failure ??= error;
+    };
     const onExit = (code: number | null): void => {
-      if (code === 0) finish();
-      else finish(new Error(`ffplay exited with code ${String(code)}`));
+      if (!aborted && code !== 0) {
+        failure ??= new Error(`ffplay exited with code ${String(code)}`);
+      }
     };
     const onClose = (code: number | null): void => {
       onExit(code);
+      finish(aborted ? undefined : failure);
       cleanupChild();
     };
 
