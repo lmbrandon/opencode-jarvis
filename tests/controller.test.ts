@@ -114,6 +114,14 @@ function runningSkillPart(
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("createJarvisController", () => {
   it("is exported", () => {
     expect(createJarvisController).toBeTypeOf("function");
@@ -296,6 +304,69 @@ describe("createJarvisController", () => {
     );
   });
 
+  it("suppresses an idle reply from a stale enabled read", async () => {
+    const harness = createHarness("session-a");
+    const enabledRead = deferred<boolean>();
+    harness.state.isEnabled
+      .mockReturnValueOnce(enabledRead.promise)
+      .mockResolvedValue(true);
+    const message = assistantMessage("assistant-stale", { completed: true });
+    const partsFor = vi.fn((_messageID: string): readonly Part[] => [
+      textPart("assistant-stale", "Reply after re-enabling"),
+    ]);
+
+    const idle = harness.controller.sessionIdle("session-a", [message], partsFor);
+    expect(harness.state.isEnabled).toHaveBeenCalledWith("session-a");
+
+    await harness.controller.disable();
+    enabledRead.resolve(true);
+    await idle;
+
+    expect(partsFor).not.toHaveBeenCalled();
+    expect(harness.voice.speakReply).not.toHaveBeenCalled();
+
+    await harness.controller.enable();
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+
+    expect(partsFor).toHaveBeenCalledOnce();
+    expect(harness.voice.speakReply).toHaveBeenCalledOnce();
+    expect(harness.voice.speakReply).toHaveBeenCalledWith(
+      "session-a",
+      "Reply after re-enabling",
+    );
+  });
+
+  it("invalidates an idle enabled read when enable starts", async () => {
+    const harness = createHarness("session-a");
+    const enabledRead = deferred<boolean>();
+    harness.state.isEnabled
+      .mockReturnValueOnce(enabledRead.promise)
+      .mockResolvedValue(true);
+    const message = assistantMessage("assistant-before-enable", {
+      completed: true,
+    });
+    const partsFor = vi.fn((_messageID: string): readonly Part[] => [
+      textPart("assistant-before-enable", "Fresh reply"),
+    ]);
+
+    const idle = harness.controller.sessionIdle("session-a", [message], partsFor);
+    await harness.controller.enable();
+    enabledRead.resolve(true);
+    await idle;
+
+    expect(partsFor).not.toHaveBeenCalled();
+    expect(harness.voice.speakReply).not.toHaveBeenCalled();
+
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+
+    expect(partsFor).toHaveBeenCalledOnce();
+    expect(harness.voice.speakReply).toHaveBeenCalledOnce();
+    expect(harness.voice.speakReply).toHaveBeenCalledWith(
+      "session-a",
+      "Fresh reply",
+    );
+  });
+
   it("speaks the latest completed non-error assistant message", async () => {
     const harness = createHarness("session-a");
     harness.state.isEnabled.mockResolvedValue(true);
@@ -371,6 +442,32 @@ describe("createJarvisController", () => {
     expect(harness.voice.speakReply).toHaveBeenCalledWith("session-a", "Ready");
   });
 
+  it("retries a message after speakReply throws synchronously", async () => {
+    const harness = createHarness("session-a");
+    harness.state.isEnabled.mockResolvedValue(true);
+    harness.voice.speakReply
+      .mockImplementationOnce(() => {
+        throw new Error("reply voice failed");
+      })
+      .mockImplementationOnce(() => undefined);
+    const message = assistantMessage("assistant-retry", { completed: true });
+    const partsFor = vi.fn((_messageID: string): readonly Part[] => [
+      textPart("assistant-retry", "Retry this reply"),
+    ]);
+
+    await expect(
+      harness.controller.sessionIdle("session-a", [message], partsFor),
+    ).rejects.toThrow("reply voice failed");
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+
+    expect(harness.voice.speakReply).toHaveBeenCalledTimes(2);
+    expect(harness.voice.speakReply).toHaveBeenLastCalledWith(
+      "session-a",
+      "Retry this reply",
+    );
+  });
+
   it("announces a running skill in an enabled session", async () => {
     const harness = createHarness("unrelated-active-session");
     harness.state.isEnabled.mockResolvedValue(true);
@@ -382,6 +479,58 @@ describe("createJarvisController", () => {
     expect(harness.voice.speakCue).toHaveBeenCalledWith(
       "session-a",
       skillLoadingCue("test-driven-development"),
+    );
+  });
+
+  it("retries a skill call after speakCue throws synchronously", async () => {
+    const harness = createHarness("session-a");
+    harness.state.isEnabled.mockResolvedValue(true);
+    harness.voice.speakCue
+      .mockImplementationOnce(() => {
+        throw new Error("cue voice failed");
+      })
+      .mockImplementationOnce(() => undefined);
+    const part = runningSkillPart("call-retry", "brainstorming");
+
+    await expect(harness.controller.partUpdated(part)).rejects.toThrow(
+      "cue voice failed",
+    );
+    await harness.controller.partUpdated(part);
+    await harness.controller.partUpdated(part);
+
+    expect(harness.voice.speakCue).toHaveBeenCalledTimes(2);
+    expect(harness.voice.speakCue).toHaveBeenLastCalledWith(
+      "session-a",
+      skillLoadingCue("brainstorming"),
+    );
+  });
+
+  it("suppresses a skill cue from a stale enabled read", async () => {
+    const harness = createHarness("session-a");
+    const enabledRead = deferred<boolean>();
+    harness.state.isEnabled
+      .mockReturnValueOnce(enabledRead.promise)
+      .mockResolvedValue(true);
+    harness.state.toggle.mockResolvedValue(false);
+    const part = runningSkillPart("call-stale", "brainstorming");
+
+    const update = harness.controller.partUpdated(part);
+    expect(harness.state.isEnabled).toHaveBeenCalledWith("session-a");
+
+    await harness.controller.toggle();
+    enabledRead.resolve(true);
+    await update;
+
+    expect(harness.voice.speakCue).not.toHaveBeenCalled();
+
+    await harness.controller.enable();
+    harness.voice.speakCue.mockClear();
+    await harness.controller.partUpdated(part);
+
+    expect(harness.voice.speakCue).toHaveBeenCalledOnce();
+    expect(harness.voice.speakCue).toHaveBeenCalledWith(
+      "session-a",
+      skillLoadingCue("brainstorming"),
     );
   });
 

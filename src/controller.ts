@@ -22,6 +22,11 @@ interface ControllerInput {
 export function createJarvisController(input: ControllerInput) {
   const spokenMessageIDs = new Set<string>();
   const announcedCallIDs = new Set<string>();
+  const modeEpochs = new Map<string, number>();
+
+  function bumpModeEpoch(sessionID: string): void {
+    modeEpochs.set(sessionID, (modeEpochs.get(sessionID) ?? 0) + 1);
+  }
 
   return {
     async toggle(): Promise<void> {
@@ -34,6 +39,7 @@ export function createJarvisController(input: ControllerInput) {
         return;
       }
 
+      bumpModeEpoch(sessionID);
       const enabled = await input.state.toggle(sessionID);
       if (enabled) {
         input.voice.speakCue(sessionID, GENERAL_GREETING);
@@ -53,6 +59,7 @@ export function createJarvisController(input: ControllerInput) {
         return;
       }
 
+      bumpModeEpoch(sessionID);
       await input.state.setEnabled(sessionID, true);
       input.voice.speakCue(sessionID, GENERAL_GREETING);
       await input.toast("Jarvis is on", "success");
@@ -67,6 +74,7 @@ export function createJarvisController(input: ControllerInput) {
         return;
       }
 
+      bumpModeEpoch(sessionID);
       await input.state.setEnabled(sessionID, false);
       input.voice.cancelSession(sessionID);
       await input.toast("Jarvis is off", "success");
@@ -89,7 +97,9 @@ export function createJarvisController(input: ControllerInput) {
       messages: readonly Message[],
       partsFor: (messageID: string) => readonly Part[],
     ): Promise<void> {
-      if (!(await input.state.isEnabled(sessionID))) return;
+      const modeEpoch = modeEpochs.get(sessionID) ?? 0;
+      const enabled = await input.state.isEnabled(sessionID);
+      if (!enabled || modeEpoch !== (modeEpochs.get(sessionID) ?? 0)) return;
 
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
@@ -109,8 +119,8 @@ export function createJarvisController(input: ControllerInput) {
           .filter(Boolean)
           .join("\n");
         if (text) {
-          spokenMessageIDs.add(message.id);
           input.voice.speakReply(sessionID, text);
+          spokenMessageIDs.add(message.id);
         }
         return;
       }
@@ -125,11 +135,18 @@ export function createJarvisController(input: ControllerInput) {
       }
       const name = part.state.input.name;
       if (typeof name !== "string" || !name.trim()) return;
-      if (!(await input.state.isEnabled(part.sessionID))) return;
+      const modeEpoch = modeEpochs.get(part.sessionID) ?? 0;
+      const enabled = await input.state.isEnabled(part.sessionID);
+      if (
+        !enabled ||
+        modeEpoch !== (modeEpochs.get(part.sessionID) ?? 0)
+      ) {
+        return;
+      }
       if (announcedCallIDs.has(part.callID)) return;
 
-      announcedCallIDs.add(part.callID);
       input.voice.speakCue(part.sessionID, skillLoadingCue(name));
+      announcedCallIDs.add(part.callID);
     },
   };
 }
