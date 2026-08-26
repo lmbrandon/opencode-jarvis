@@ -812,7 +812,10 @@ function createTuiApi() {
     },
     getPromptProps: () => promptProps,
     dismissPrompt() {
-      promptOnClose?.();
+      const onClose = promptOnClose;
+      promptProps = undefined;
+      promptOnClose = undefined;
+      onClose?.();
     },
     eventHandlers,
     eventUnsubscribers,
@@ -835,7 +838,9 @@ function installTuiDependencyMocks() {
     toggle: vi.fn(async () => true),
   };
   const fish = {
-    validateKey: vi.fn(async () => true),
+    validateKey: vi.fn<
+      (apiKey: string, signal?: AbortSignal) => Promise<boolean>
+    >(async () => true),
     synthesize: vi.fn(),
   };
   const voice = {
@@ -940,6 +945,30 @@ describe("JarvisTui", () => {
     expect(dependencies.fish.validateKey).not.toHaveBeenCalled();
   });
 
+  it("returns after wiring the plugin while the key prompt remains open", async () => {
+    delete process.env.FISH_API_KEY;
+    vi.resetModules();
+    installTuiDependencyMocks();
+    const host = createTuiApi();
+    const { JarvisTui } = await import("../src/tui.js");
+
+    let initialized = false;
+    const initialization = JarvisTui(host.api, undefined, {} as never);
+    void initialization.then(() => {
+      initialized = true;
+    });
+    await Promise.resolve();
+    const resolvedBeforePrompt = initialized;
+
+    host.getPromptProps()?.onCancel?.();
+    await initialization;
+
+    expect(host.registerLayer).toHaveBeenCalledOnce();
+    expect(host.api.event.on).toHaveBeenCalledTimes(2);
+    expect(host.disposeCallbacks).toHaveLength(1);
+    expect(resolvedBeforePrompt).toBe(true);
+  });
+
   it("prompts for a missing key and retains a validated trimmed candidate", async () => {
     delete process.env.FISH_API_KEY;
     vi.resetModules();
@@ -956,6 +985,13 @@ describe("JarvisTui", () => {
     });
     prompt?.onConfirm?.("  prompted-secret  ");
     await startup;
+    await vi.waitFor(() => {
+      expect(host.toast).toHaveBeenCalledWith({
+        title: "Jarvis",
+        message: "Fish Audio is ready",
+        variant: "success",
+      });
+    });
 
     expect(dependencies.fish.validateKey).toHaveBeenCalledWith(
       "prompted-secret",
@@ -964,11 +1000,6 @@ describe("JarvisTui", () => {
     const voiceOptions = dependencies.voiceConstructor.mock.calls[0]?.[0];
     expect(voiceOptions?.getApiKey()).toBe("prompted-secret");
     expect(host.clearDialog).toHaveBeenCalledOnce();
-    expect(host.toast).toHaveBeenCalledWith({
-      title: "Jarvis",
-      message: "Fish Audio is ready",
-      variant: "success",
-    });
   });
 
   it("settles a canceled key prompt with an unavailable warning", async () => {
@@ -1010,7 +1041,7 @@ describe("JarvisTui", () => {
     host.getPromptProps()?.onCancel?.();
     await startup;
 
-    expect(host.clearDialog).toHaveBeenCalledOnce();
+    expect(host.clearDialog).not.toHaveBeenCalled();
     expect(host.toast).toHaveBeenCalledOnce();
     expect(host.toast).toHaveBeenCalledWith({
       title: "Jarvis",
@@ -1030,15 +1061,17 @@ describe("JarvisTui", () => {
     const startup = JarvisTui(host.api, undefined, {} as never);
     host.getPromptProps()?.onConfirm?.("rejected-secret");
     await startup;
+    await vi.waitFor(() => {
+      expect(host.toast).toHaveBeenCalledWith({
+        title: "Jarvis",
+        message: "Fish Audio rejected that API key",
+        variant: "error",
+      });
+    });
 
     const voiceOptions = dependencies.voiceConstructor.mock.calls[0]?.[0];
     expect(voiceOptions?.getApiKey()).toBeUndefined();
     expect(host.toast).toHaveBeenCalledOnce();
-    expect(host.toast).toHaveBeenCalledWith({
-      title: "Jarvis",
-      message: "Fish Audio rejected that API key",
-      variant: "error",
-    });
   });
 
   it("reports validation errors and consumes log rejection", async () => {
@@ -1135,6 +1168,37 @@ describe("JarvisTui", () => {
     expect(dependencies.controller.partUpdated).toHaveBeenCalledWith(part);
   });
 
+  it("reports a synchronous idle message lookup failure", async () => {
+    process.env.FISH_API_KEY = "environment-secret";
+    vi.resetModules();
+    installTuiDependencyMocks();
+    const host = createTuiApi();
+    host.messages.mockImplementation(() => {
+      throw new Error("messages\tlookup failed");
+    });
+    const { JarvisTui } = await import("../src/tui.js");
+
+    await JarvisTui(host.api, undefined, {} as never);
+    const idle = host.eventHandlers.get("session.idle");
+
+    expect(() =>
+      idle?.({ properties: { sessionID: "session-error" } } as never),
+    ).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(host.toast).toHaveBeenCalledWith({
+      title: "Jarvis",
+      message: "messages lookup failed",
+      variant: "error",
+    });
+    expect(host.log).toHaveBeenCalledWith({
+      service: "opencode-jarvis",
+      level: "error",
+      message: "messages lookup failed",
+    });
+  });
+
   it("reports rejected event callbacks without leaking log rejection", async () => {
     process.env.FISH_API_KEY = "environment-secret";
     vi.resetModules();
@@ -1203,13 +1267,60 @@ describe("JarvisTui", () => {
     const host = createTuiApi();
     const { JarvisTui } = await import("../src/tui.js");
 
-    const startup = JarvisTui(host.api, undefined, {} as never);
+    await JarvisTui(host.api, undefined, {} as never);
     expect(host.getPromptProps()).toBeDefined();
     await host.disposeCallbacks[0]?.();
 
     expect(host.clearDialog).toHaveBeenCalledOnce();
-    await expect(startup).resolves.toBeUndefined();
     expect(host.toast).not.toHaveBeenCalled();
+  });
+
+  it("aborts and awaits pending key validation during disposal", async () => {
+    delete process.env.FISH_API_KEY;
+    vi.resetModules();
+    const dependencies = installTuiDependencyMocks();
+    const releaseAbort = deferred<void>();
+    let validationSignal: AbortSignal | undefined;
+    dependencies.fish.validateKey.mockImplementation(
+      async (_candidate, signal) => {
+        validationSignal = signal;
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              void releaseAbort.promise.then(() => {
+                reject(new DOMException("Aborted", "AbortError"));
+              });
+            },
+            { once: true },
+          );
+        });
+        return true;
+      },
+    );
+    const host = createTuiApi();
+    const { JarvisTui } = await import("../src/tui.js");
+
+    await JarvisTui(host.api, undefined, {} as never);
+    host.getPromptProps()?.onConfirm?.("pending-secret");
+    await Promise.resolve();
+    expect(dependencies.fish.validateKey).toHaveBeenCalledOnce();
+
+    let disposalComplete = false;
+    const disposal = Promise.resolve(host.disposeCallbacks[0]?.()).then(() => {
+      disposalComplete = true;
+    });
+    expect(validationSignal).toBeInstanceOf(AbortSignal);
+    expect(validationSignal?.aborted).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(disposalComplete).toBe(false);
+
+    releaseAbort.resolve();
+    await disposal;
+    expect(disposalComplete).toBe(true);
+    expect(host.toast).not.toHaveBeenCalled();
+    expect(host.log).not.toHaveBeenCalled();
   });
 
   it("does not expose Fish response bodies or the prompted key", async () => {
@@ -1228,12 +1339,14 @@ describe("JarvisTui", () => {
     const startup = JarvisTui(host.api, undefined, {} as never);
     host.getPromptProps()?.onConfirm?.("service-secret");
     await startup;
-
-    expect(host.toast).toHaveBeenCalledWith({
-      title: "Jarvis",
-      message: "Fish Audio request failed (503)",
-      variant: "error",
+    await vi.waitFor(() => {
+      expect(host.toast).toHaveBeenCalledWith({
+        title: "Jarvis",
+        message: "Fish Audio request failed (503)",
+        variant: "error",
+      });
     });
+
     expect(host.log).toHaveBeenCalledWith({
       service: "opencode-jarvis",
       level: "error",

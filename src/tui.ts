@@ -57,6 +57,7 @@ export const JarvisTui: TuiPlugin = async (api) => {
   const environmentKey = process.env.FISH_API_KEY?.trim();
   let apiKey = environmentKey || undefined;
   const startupController = new AbortController();
+  let startupTask = Promise.resolve();
   let disposed = false;
   let closeKeyDialog: (() => void) | undefined;
   const stateRoot = api.state.path.state;
@@ -116,9 +117,14 @@ export const JarvisTui: TuiPlugin = async (api) => {
   });
   const unsubscribeIdle = api.event.on("session.idle", (event) => {
     const sessionID = event.properties.sessionID;
-    const messages = api.state.session.messages(sessionID);
     void Promise.resolve()
-      .then(() => controller.sessionIdle(sessionID, messages, api.state.part))
+      .then(() =>
+        controller.sessionIdle(
+          sessionID,
+          api.state.session.messages(sessionID),
+          api.state.part,
+        ),
+      )
       .catch(report);
   });
   const unsubscribePart = api.event.on("message.part.updated", (event) => {
@@ -133,53 +139,64 @@ export const JarvisTui: TuiPlugin = async (api) => {
     unregisterCommands();
     unsubscribeIdle();
     unsubscribePart();
-    await voice.dispose();
+    await Promise.all([startupTask, voice.dispose()]);
   });
 
   if (!apiKey) {
-    const candidate = await new Promise<string | undefined>((resolve) => {
-      let settled = false;
-      const settle = (value: string | undefined): void => {
-        if (settled) return;
-        settled = true;
-        closeKeyDialog = undefined;
-        api.ui.dialog.clear();
-        resolve(value);
-      };
-      closeKeyDialog = () => settle(undefined);
+    startupTask = (async () => {
+      const candidate = await new Promise<string | undefined>((resolve) => {
+        let settled = false;
+        let ownsDialog = true;
+        const settle = (
+          value: string | undefined,
+          clearOwnedDialog = true,
+        ): void => {
+          if (settled) return;
+          settled = true;
+          closeKeyDialog = undefined;
+          const shouldClear = clearOwnedDialog && ownsDialog;
+          ownsDialog = false;
+          if (shouldClear) api.ui.dialog.clear();
+          resolve(value);
+        };
+        closeKeyDialog = () => settle(undefined);
 
-      api.ui.dialog.replace(
-        () =>
-          api.ui.DialogPrompt({
-            title: "Fish Audio API key",
-            placeholder: "Enter FISH_API_KEY",
-            onConfirm: (value) => settle(value.trim() || undefined),
-            onCancel: () => settle(undefined),
-          }),
-        () => settle(undefined),
-      );
-    });
+        api.ui.dialog.replace(
+          () =>
+            api.ui.DialogPrompt({
+              title: "Fish Audio API key",
+              placeholder: "Enter FISH_API_KEY",
+              onConfirm: (value) => settle(value.trim() || undefined),
+              onCancel: () => settle(undefined),
+            }),
+          () => settle(undefined, false),
+        );
+      });
 
-    if (disposed) return;
-    if (!candidate) {
-      toast(
-        "Speech is unavailable until FISH_API_KEY is configured",
-        "warning",
-      );
-    } else {
-      try {
-        const valid = await fish.validateKey(candidate, startupController.signal);
-        if (disposed) return;
-        if (valid) {
-          apiKey = candidate;
-          toast("Fish Audio is ready", "success");
-        } else {
-          toast("Fish Audio rejected that API key", "error");
+      if (disposed) return;
+      if (!candidate) {
+        toast(
+          "Speech is unavailable until FISH_API_KEY is configured",
+          "warning",
+        );
+      } else {
+        try {
+          const valid = await fish.validateKey(
+            candidate,
+            startupController.signal,
+          );
+          if (disposed) return;
+          if (valid) {
+            apiKey = candidate;
+            toast("Fish Audio is ready", "success");
+          } else {
+            toast("Fish Audio rejected that API key", "error");
+          }
+        } catch (error) {
+          report(error, candidate);
         }
-      } catch (error) {
-        report(error, candidate);
       }
-    }
+    })().catch(report);
   }
 };
 
