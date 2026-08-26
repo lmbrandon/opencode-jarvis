@@ -426,6 +426,38 @@ describe("createJarvisController", () => {
     );
   });
 
+  it("strips fenced code blocks from the reply before speaking it", async () => {
+    const harness = createHarness("session-a");
+    harness.state.isEnabled.mockResolvedValue(true);
+    const message = assistantMessage("assistant-1", { completed: true });
+    const partsFor = vi.fn((): readonly Part[] => [
+      textPart(
+        "assistant-1",
+        "Here's the fix:\n```ts\nconst x = 1;\n```\nDone.",
+      ),
+    ]);
+
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+
+    expect(harness.voice.speakReply).toHaveBeenCalledWith(
+      "session-a",
+      "Here's the fix:\n\nDone.",
+    );
+  });
+
+  it("does not speak a reply that is only a code block", async () => {
+    const harness = createHarness("session-a");
+    harness.state.isEnabled.mockResolvedValue(true);
+    const message = assistantMessage("assistant-1", { completed: true });
+    const partsFor = vi.fn((): readonly Part[] => [
+      textPart("assistant-1", "```ts\nconst x = 1;\n```"),
+    ]);
+
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+
+    expect(harness.voice.speakReply).not.toHaveBeenCalled();
+  });
+
   it("dedupes a message only after a nonempty reply is ready", async () => {
     const harness = createHarness("session-a");
     harness.state.isEnabled.mockResolvedValue(true);

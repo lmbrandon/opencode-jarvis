@@ -100,7 +100,7 @@ New sessions default to off. Jarvis mode is persisted by OpenCode session ID, so
 While enabled, Jarvis:
 
 - Appends the instruction from `src/prompt.ts` to the session system prompt.
-- Speaks completed assistant replies.
+- Speaks completed assistant replies, skipping fenced code blocks and unwrapping inline code spans to their bare text first, so replies read as prose rather than raw code.
 - Speaks a cached greeting when enabled.
 - Announces skill loading, with repeated cues served from the audio cache.
 
