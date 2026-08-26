@@ -16,11 +16,28 @@ export function createSystemTransform(state: StateReader) {
 }
 
 export const JarvisEngine: Plugin = async ({ client }) => {
-  const paths = await client.path.get();
-  const stateRoot = paths.data?.state;
-  if (!stateRoot) return {};
+  // client.path.get() must not be called here: OpenCode blocks its own
+  // bootstrap on this function's returned promise, with no timeout. In
+  // single-process mode, the RPC routes back into that same in-flight
+  // bootstrap and deadlocks forever. Resolve it lazily instead, on first
+  // actual hook invocation, by which point bootstrap has already finished.
+  let statePromise: Promise<SessionStateStore | undefined> | undefined;
+  const resolveState = (): Promise<SessionStateStore | undefined> => {
+    if (!statePromise) {
+      statePromise = client.path.get().then((paths) => {
+        const stateRoot = paths.data?.state;
+        return stateRoot ? new SessionStateStore(stateRoot) : undefined;
+      });
+    }
+    return statePromise;
+  };
+  const state: StateReader = {
+    isEnabled: async (sessionID) => {
+      const store = await resolveState();
+      return store ? store.isEnabled(sessionID) : false;
+    },
+  };
 
-  const state = new SessionStateStore(stateRoot);
   return {
     "experimental.chat.system.transform": createSystemTransform(state),
   } satisfies Hooks;

@@ -90,13 +90,33 @@ describe("JarvisEngine", () => {
     expect(output.system).toEqual(["existing", JARVIS_SYSTEM_INSTRUCTION]);
   });
 
-  test("returns no hooks when OpenCode provides no state path", async () => {
+  test("does not inject the instruction when OpenCode provides no state path", async () => {
     const getPath = vi.fn().mockResolvedValue({ data: undefined });
+    const hooks = await JarvisEngine({
+      client: { path: { get: getPath } },
+    } as unknown as PluginInput);
+    const output = { system: ["existing"] };
 
-    await expect(
-      JarvisEngine({
-        client: { path: { get: getPath } },
-      } as unknown as PluginInput),
-    ).resolves.toEqual({});
+    await hooks["experimental.chat.system.transform"]?.(
+      { sessionID: "session-a" } as Parameters<
+        NonNullable<typeof hooks["experimental.chat.system.transform"]>
+      >[0],
+      output,
+    );
+
+    expect(output.system).toEqual(["existing"]);
+  });
+
+  test("does not call client.path.get() while OpenCode is still loading the plugin", async () => {
+    // OpenCode blocks its own bootstrap on this promise resolving, with no
+    // timeout. In single-process mode, client.path.get() routes back into
+    // that same in-flight bootstrap and deadlocks forever if called here.
+    const getPath = vi.fn().mockResolvedValue({ data: { state: "/tmp/unused" } });
+
+    await JarvisEngine({
+      client: { path: { get: getPath } },
+    } as unknown as PluginInput);
+
+    expect(getPath).not.toHaveBeenCalled();
   });
 });
