@@ -1132,6 +1132,96 @@ describe("JarvisTui", () => {
     });
   });
 
+  it("reports async and synchronous native command failures without rejecting", async () => {
+    process.env.FISH_API_KEY = "environment-secret";
+    vi.resetModules();
+    const dependencies = installTuiDependencyMocks();
+    dependencies.controller.toggle.mockRejectedValue(
+      new Error("toggle\nstate failed"),
+    );
+    dependencies.controller.enable.mockImplementation(() => {
+      throw new Error("enable\tstate failed");
+    });
+    const host = createTuiApi();
+    const { JarvisTui } = await import("../src/tui.js");
+
+    await JarvisTui(host.api, undefined, {} as never);
+    const layer = host.registerLayer.mock.calls[0]?.[0];
+    expect(layer).toBeDefined();
+    const commands = layer!.commands;
+
+    const toggleResult = await commands[0]?.run().then(
+      () => "resolved" as const,
+      () => "rejected" as const,
+    );
+    let enableResult: Promise<void> | undefined;
+    let enableThrow: unknown;
+    try {
+      enableResult = commands[1]?.run();
+    } catch (error) {
+      enableThrow = error;
+    }
+
+    expect(toggleResult).toBe("resolved");
+    expect(enableThrow).toBeUndefined();
+    await expect(enableResult).resolves.toBeUndefined();
+    expect(dependencies.controller.toggle).toHaveBeenCalledOnce();
+    expect(dependencies.controller.enable).toHaveBeenCalledOnce();
+    expect(host.toast.mock.calls).toEqual([
+      [
+        {
+          title: "Jarvis",
+          message: "toggle state failed",
+          variant: "error",
+        },
+      ],
+      [
+        {
+          title: "Jarvis",
+          message: "enable state failed",
+          variant: "error",
+        },
+      ],
+    ]);
+    expect(host.log.mock.calls).toEqual([
+      [
+        {
+          service: "opencode-jarvis",
+          level: "error",
+          message: "toggle state failed",
+        },
+      ],
+      [
+        {
+          service: "opencode-jarvis",
+          level: "error",
+          message: "enable state failed",
+        },
+      ],
+    ]);
+  });
+
+  it("invokes successful native command actions once without reporting", async () => {
+    process.env.FISH_API_KEY = "environment-secret";
+    vi.resetModules();
+    const dependencies = installTuiDependencyMocks();
+    const host = createTuiApi();
+    const { JarvisTui } = await import("../src/tui.js");
+
+    await JarvisTui(host.api, undefined, {} as never);
+    const layer = host.registerLayer.mock.calls[0]?.[0];
+    expect(layer).toBeDefined();
+    const commands = layer!.commands;
+
+    await expect(commands[2]?.run()).resolves.toBeUndefined();
+    await expect(commands[3]?.run()).resolves.toBeUndefined();
+
+    expect(dependencies.controller.disable).toHaveBeenCalledOnce();
+    expect(dependencies.controller.status).toHaveBeenCalledOnce();
+    expect(host.toast).not.toHaveBeenCalled();
+    expect(host.log).not.toHaveBeenCalled();
+  });
+
   it("subscribes only to idle and part events and forwards current state", async () => {
     process.env.FISH_API_KEY = "environment-secret";
     vi.resetModules();

@@ -112,8 +112,21 @@ export const JarvisTui: TuiPlugin = async (api) => {
         : undefined;
     },
   });
+  const guardCommand =
+    (action: () => Promise<void>) => async (): Promise<void> => {
+      try {
+        await action();
+      } catch (error) {
+        report(error);
+      }
+    };
   const unregisterCommands = api.keymap.registerLayer({
-    commands: jarvisCommands(controller),
+    commands: jarvisCommands({
+      toggle: guardCommand(controller.toggle),
+      enable: guardCommand(controller.enable),
+      disable: guardCommand(controller.disable),
+      status: guardCommand(controller.status),
+    }),
   });
   const unsubscribeIdle = api.event.on("session.idle", (event) => {
     const sessionID = event.properties.sessionID;
