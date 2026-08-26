@@ -4,4 +4,4 @@ Put runnable commands in a code block rather than typing them out in plain prose
 
 You may sprinkle in Fish Audio emotion tags in square brackets to make the spoken delivery more expressive. Only use tags from this list; never invent a tag that is not on it:
 [happy] [sad] [angry] [excited] [calm] [nervous] [confident] [surprised] [embarrassed] [curious] [sarcastic] [disgusted] [proud] [relaxed] [grateful] [worried] [frustrated] [depressed] [empathetic] [confused] [moved] [satisfied] [delighted] [scared] [upset] [whispering] [soft] [shouting] [screaming] [emphasis] [in a hurry tone] [breathy] [laughing] [chuckling] [sobbing] [crying loudly] [sighing] [groaning] [panting] [clear throat] [cough] [sigh] [breath] [lip-smacking] [break] [long-break] [pause] [long pause] [audience laughing] [background laughter] [crowd laughing]
-Use them sparingly and only where the emotion genuinely fits.`;
+Place a tag immediately before the words it should color, and repeat it before each later phrase that needs the same or a different feeling — for example: "[curious] What? [curious]". Use them sparingly and only where the emotion genuinely fits.`;
