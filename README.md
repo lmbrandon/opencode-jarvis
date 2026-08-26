@@ -80,7 +80,7 @@ Quit and restart OpenCode after changing either config file.
 
 Set `FISH_API_KEY` in the environment when possible. If it is absent, the plugin prompts at startup, validates the entered key, and retains a valid key in memory only for the running OpenCode process.
 
-OpenCode 1.18.22 does not password-mask this prompt, so typed input can be visible. Prefer the environment variable, especially when screen sharing or working in a public space. Never store a key in `opencode.json`.
+OpenCode 1.18.22 does not password-mask this prompt, so typed input can be visible. Prefer the environment variable, especially when screen sharing or working in a public space. Never store a key in either `opencode.json` or `tui.json`.
 
 Fish Audio is a remote service. While Jarvis is enabled, the plugin sends the complete text of assistant replies and reusable cue text to Fish Audio for speech synthesis. Skill-loading cue text includes the skill name. Fish Audio's privacy and retention terms apply to this content. The plugin also sends the API key to Fish Audio when validating a prompted key and authenticating synthesis requests.
 
@@ -120,7 +120,7 @@ Reusable cues are cached under the OpenCode state directory. Assistant replies u
 
 ## Manual Smoke Test
 
-1. Build the package with `npm run build`, configure the local plugin URI, and start OpenCode with `FISH_API_KEY` set.
+1. Build the package with `npm run build`, configure the local plugin URI in both `opencode.json` and `tui.json`, and start OpenCode with `FISH_API_KEY` set.
 2. Run `/jarvis-status` in a session and confirm it reports off.
 3. Run `/jarvis-on` and confirm the enabled toast and greeting.
 4. Send a typed prompt and confirm the completed assistant reply is spoken.
@@ -131,7 +131,7 @@ Reusable cues are cached under the OpenCode state directory. Assistant replies u
 
 ## Uninstall
 
-Remove only the exact local `file://` URI or `opencode-jarvis` npm entry that you added to the relevant `opencode.json` plugin array. Preserve every unrelated plugin entry.
+Remove only the exact local `file://` URI or `opencode-jarvis` npm entry that you added to the relevant `opencode.json` and `tui.json` plugin arrays. Preserve every unrelated plugin entry.
 
 Exit all OpenCode processes using the plugin before deleting its state. Then, to delete persisted mode state and cached audio, optionally remove only the `opencode-jarvis` subdirectory from the OpenCode state directory. Do not remove unrelated OpenCode state.
 
