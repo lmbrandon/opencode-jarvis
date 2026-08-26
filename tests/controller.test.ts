@@ -14,7 +14,7 @@ import { createJarvisController } from "../src/controller.js";
 function createHarness(initialSessionID: string | undefined) {
   let sessionID = initialSessionID;
   const state = {
-    isEnabled: vi.fn(async () => false),
+    isEnabled: vi.fn(async (_sessionID: string) => false),
     setEnabled: vi.fn(async (_sessionID: string, enabled: boolean) => enabled),
     toggle: vi.fn(async () => true),
   };
@@ -266,18 +266,34 @@ describe("createJarvisController", () => {
     ]);
   });
 
-  it("leaves disabled idle events inert without reading message parts", async () => {
+  it("does not let a disabled idle event poison message dedupe", async () => {
     const harness = createHarness("unrelated-active-session");
+    harness.state.isEnabled
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
     const message = assistantMessage("assistant-1", { completed: true });
     const partsFor = vi.fn((_messageID: string): readonly Part[] => [
-      textPart("assistant-1", "Should stay silent"),
+      textPart("assistant-1", "Ready after enabling"),
     ]);
 
     await harness.controller.sessionIdle("session-a", [message], partsFor);
 
-    expect(harness.state.isEnabled).toHaveBeenCalledWith("session-a");
     expect(partsFor).not.toHaveBeenCalled();
     expect(harness.voice.speakReply).not.toHaveBeenCalled();
+
+    await harness.controller.sessionIdle("session-a", [message], partsFor);
+
+    expect(harness.state.isEnabled.mock.calls).toEqual([
+      ["session-a"],
+      ["session-a"],
+    ]);
+    expect(partsFor).toHaveBeenCalledOnce();
+    expect(partsFor).toHaveBeenCalledWith("assistant-1");
+    expect(harness.voice.speakReply).toHaveBeenCalledOnce();
+    expect(harness.voice.speakReply).toHaveBeenCalledWith(
+      "session-a",
+      "Ready after enabling",
+    );
   });
 
   it("speaks the latest completed non-error assistant message", async () => {
@@ -369,7 +385,7 @@ describe("createJarvisController", () => {
     );
   });
 
-  it("ignores updates that are not valid running skill candidates", async () => {
+  it("ignores invalid skill candidates without poisoning call dedupe", async () => {
     const harness = createHarness("session-a");
     harness.state.isEnabled.mockResolvedValue(true);
     const nonTool: Part = {
@@ -412,6 +428,17 @@ describe("createJarvisController", () => {
 
     expect(harness.state.isEnabled).not.toHaveBeenCalled();
     expect(harness.voice.speakCue).not.toHaveBeenCalled();
+
+    await harness.controller.partUpdated(
+      runningSkillPart("call-non-skill", "brainstorming"),
+    );
+
+    expect(harness.state.isEnabled).toHaveBeenCalledWith("session-a");
+    expect(harness.voice.speakCue).toHaveBeenCalledOnce();
+    expect(harness.voice.speakCue).toHaveBeenCalledWith(
+      "session-a",
+      skillLoadingCue("brainstorming"),
+    );
   });
 
   it("dedupes skill calls only after an enabled session queues the cue", async () => {
@@ -440,6 +467,61 @@ describe("createJarvisController", () => {
       ["session-enabled"],
       ["session-enabled"],
     ]);
+    expect(harness.voice.speakCue).toHaveBeenCalledOnce();
+    expect(harness.voice.speakCue).toHaveBeenCalledWith(
+      "session-enabled",
+      skillLoadingCue("brainstorming"),
+    );
+  });
+
+  it("keeps distinct message and skill events independent across sessions", async () => {
+    const harness = createHarness("active-tui-session");
+    harness.state.isEnabled.mockImplementation(
+      async (sessionID: string) => sessionID === "session-enabled",
+    );
+    const disabledMessage: AssistantMessage = {
+      ...assistantMessage("assistant-disabled", { completed: true }),
+      sessionID: "session-disabled",
+    };
+    const enabledMessage: AssistantMessage = {
+      ...assistantMessage("assistant-enabled", { completed: true }),
+      sessionID: "session-enabled",
+    };
+    const partsFor = vi.fn((messageID: string): readonly Part[] => [
+      textPart(messageID, `Reply from ${messageID}`),
+    ]);
+
+    await harness.controller.sessionIdle(
+      "session-disabled",
+      [disabledMessage],
+      partsFor,
+    );
+    await harness.controller.partUpdated(
+      runningSkillPart("call-disabled", "brainstorming", "session-disabled"),
+    );
+    await harness.controller.sessionIdle(
+      "session-enabled",
+      [enabledMessage],
+      partsFor,
+    );
+    await harness.controller.partUpdated(
+      runningSkillPart("call-enabled", "brainstorming", "session-enabled"),
+    );
+
+    expect(harness.getSessionID).not.toHaveBeenCalled();
+    expect(harness.state.isEnabled.mock.calls).toEqual([
+      ["session-disabled"],
+      ["session-disabled"],
+      ["session-enabled"],
+      ["session-enabled"],
+    ]);
+    expect(partsFor).toHaveBeenCalledOnce();
+    expect(partsFor).toHaveBeenCalledWith("assistant-enabled");
+    expect(harness.voice.speakReply).toHaveBeenCalledOnce();
+    expect(harness.voice.speakReply).toHaveBeenCalledWith(
+      "session-enabled",
+      "Reply from assistant-enabled",
+    );
     expect(harness.voice.speakCue).toHaveBeenCalledOnce();
     expect(harness.voice.speakCue).toHaveBeenCalledWith(
       "session-enabled",
