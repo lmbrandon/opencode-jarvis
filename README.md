@@ -100,11 +100,13 @@ New sessions default to off. Jarvis mode is persisted by OpenCode session ID, so
 While enabled, Jarvis:
 
 - Appends the instruction from `src/prompt.ts` to the session system prompt.
-- Speaks completed assistant replies, skipping fenced code blocks and unwrapping inline code spans to their bare text first, so replies read as prose rather than raw code.
+- Speaks completed assistant replies, stripping fenced code blocks, inline code spans, and markdown formatting (bold, italic, headings, list bullets) first, so replies read as plain prose rather than raw markdown.
 - Speaks a cached greeting when enabled.
 - Announces skill loading, with repeated cues served from the audio cache.
 
 `src/prompt.ts` is editable in a source checkout for development builds. The npm package does not include source files, so npm consumers who want to customize this instruction must use a source checkout and rebuild.
+
+`src/prompt.ts` also invites the model to add Fish Audio emotion tags (e.g. `[excited]`, `[chuckle]`) in square brackets for more expressive delivery. This is experimental: the tags are sent to Fish Audio as part of the reply text, unstripped, and only their effect on delivery is being evaluated.
 
 Disabled sessions do not inject prompts, synthesize, play, or cache speech, or alter tool and permission behavior. However, if `FISH_API_KEY` is absent, the TUI performs startup key acquisition and validation independently of per-session mode so Jarvis can later be enabled. The controller remains loaded so Jarvis mode can be re-enabled.
 

@@ -1,7 +1,7 @@
 import type { Message, Part } from "@opencode-ai/sdk/v2";
 
 import { GENERAL_GREETING, skillLoadingCue } from "./cues.js";
-import { stripCodeForSpeech } from "./speech-text.js";
+import { stripMarkdownForSpeech } from "./speech-text.js";
 
 type ToastVariant = "info" | "success" | "warning" | "error";
 
@@ -113,7 +113,7 @@ export function createJarvisController(input: ControllerInput) {
         }
         if (spokenMessageIDs.has(message.id)) return;
 
-        const text = stripCodeForSpeech(
+        const text = stripMarkdownForSpeech(
           partsFor(message.id)
             .flatMap((part) =>
               part.type === "text" && !part.ignored ? [part.text.trim()] : [],
