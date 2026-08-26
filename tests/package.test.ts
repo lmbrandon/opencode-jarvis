@@ -31,3 +31,34 @@ describe("package entrypoints", () => {
     });
   });
 });
+
+type PluginConfig = {
+  $schema?: string;
+  plugin?: unknown[];
+};
+
+function jsonExamples(markdown: string): PluginConfig[] {
+  return [...markdown.matchAll(/```json\n([\s\S]*?)\n```/g)].map(
+    (match) => JSON.parse(match[1]!) as PluginConfig,
+  );
+}
+
+describe("installation documentation", () => {
+  it("documents separate server and TUI plugin configs", async () => {
+    const readme = await readFile(
+      new URL("../README.md", import.meta.url),
+      "utf8",
+    );
+    const examples = jsonExamples(readme);
+    const packageSpec = "file:///home/lmbrandon/videoDemos/opencode-jarvis";
+
+    expect(examples).toContainEqual({
+      $schema: "https://opencode.ai/config.json",
+      plugin: expect.arrayContaining([packageSpec]),
+    });
+    expect(examples).toContainEqual({
+      $schema: "https://opencode.ai/tui.json",
+      plugin: expect.arrayContaining([packageSpec]),
+    });
+  });
+});

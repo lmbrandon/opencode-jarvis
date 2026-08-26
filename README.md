@@ -24,7 +24,9 @@ Build the package:
 npm run build
 ```
 
-Then add the package directory to the project's `opencode.json` plugin array without removing any existing plugins:
+OpenCode loads server and TUI plugins from separate configuration files. Add the package directory to both files without removing unrelated plugins.
+
+Register the server module in the project `opencode.json`:
 
 ```json
 {
@@ -36,11 +38,22 @@ Then add the package directory to the project's `opencode.json` plugin array wit
 }
 ```
 
-This example uses the approved checkout path. On another machine or in another checkout, replace it with the absolute `file://` URI for that clone. This example is documentation only. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration.
+Register the native commands and speech integration in the project `tui.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["file:///home/lmbrandon/videoDemos/opencode-jarvis"]
+}
+```
+
+This example uses the approved checkout path. On another machine or in another checkout, replace it with the absolute `file://` URI for that clone in both files. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration. Quit and restart OpenCode after changing either config file.
 
 ## npm Installation
 
-After the package is published, preserve existing plugins and add `opencode-jarvis` to the relevant `opencode.json` plugin array:
+After the package is published, preserve existing plugins and add `opencode-jarvis` to both runtime configurations.
+
+`opencode.json`:
 
 ```json
 {
@@ -51,6 +64,17 @@ After the package is published, preserve existing plugins and add `opencode-jarv
   ]
 }
 ```
+
+`tui.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": ["opencode-jarvis"]
+}
+```
+
+Quit and restart OpenCode after changing either config file.
 
 ## Fish Audio Key
 
