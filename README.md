@@ -36,7 +36,7 @@ Then add the package directory to the project's `opencode.json` plugin array wit
 }
 ```
 
-This example is documentation only. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration.
+This example uses the approved checkout path. On another machine or in another checkout, replace it with the absolute `file://` URI for that clone. This example is documentation only. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration.
 
 ## npm Installation
 
@@ -58,6 +58,8 @@ Set `FISH_API_KEY` in the environment when possible. If it is absent, the plugin
 
 OpenCode 1.18.22 does not password-mask this prompt, so typed input can be visible. Prefer the environment variable, especially when screen sharing or working in a public space. Never store a key in `opencode.json`.
 
+Fish Audio is a remote service. While Jarvis is enabled, the plugin sends the complete text of assistant replies and reusable cue text to Fish Audio for speech synthesis. Skill-loading cue text includes the skill name. Fish Audio's privacy and retention terms apply to this content. The plugin also sends the API key to Fish Audio when validating a prompted key and authenticating synthesis requests.
+
 ## Commands
 
 - `/jarvis`: toggle Jarvis mode for the current session.
@@ -69,14 +71,18 @@ OpenCode 1.18.22 native command callbacks do not receive arguments. The hyphenat
 
 ## Behavior
 
-Jarvis mode defaults to off for each session. While enabled, it:
+New sessions default to off. Jarvis mode is persisted by OpenCode session ID, so reopening or resuming an enabled session leaves it enabled until it is turned off. A resumed enabled session can therefore send reply and skill-loading cue text to Fish Audio and play the resulting speech.
 
-- Appends the editable instruction from `src/prompt.ts` to the session system prompt.
+While enabled, Jarvis:
+
+- Appends the instruction from `src/prompt.ts` to the session system prompt.
 - Speaks completed assistant replies.
 - Speaks a cached greeting when enabled.
 - Announces skill loading, with repeated cues served from the audio cache.
 
-While disabled, it does not change prompt, tool, permission, Fish Audio, or audio behavior. The controller stays loaded so Jarvis mode can be re-enabled.
+`src/prompt.ts` is editable in a source checkout for development builds. The npm package does not include source files, so npm consumers who want to customize this instruction must use a source checkout and rebuild.
+
+Disabled sessions do not inject prompts, synthesize, play, or cache speech, or alter tool and permission behavior. However, if `FISH_API_KEY` is absent, the TUI performs startup key acquisition and validation independently of per-session mode so Jarvis can later be enabled. The controller remains loaded so Jarvis mode can be re-enabled.
 
 Reusable cues are cached under the OpenCode state directory. Assistant replies use unique temporary MP3 files that are removed after playback. Version 0.1 accepts typed input and produces spoken output only.
 
@@ -86,6 +92,7 @@ Reusable cues are cached under the OpenCode state directory. Assistant replies u
 - It does not install a permission hook, bypass permissions, or automatically approve actions.
 - A key entered at the startup prompt is retained in memory only after validation.
 - Because OpenCode 1.18.22 can display prompt input, using `FISH_API_KEY` is recommended.
+- Reply and cue text sent for synthesis is subject to Fish Audio's privacy and retention terms.
 
 ## Manual Smoke Test
 
@@ -93,16 +100,16 @@ Reusable cues are cached under the OpenCode state directory. Assistant replies u
 2. Run `/jarvis-status` in a session and confirm it reports off.
 3. Run `/jarvis-on` and confirm the enabled toast and greeting.
 4. Send a typed prompt and confirm the completed assistant reply is spoken.
-5. Trigger the same skill-loading cue more than once and confirm the repeated cue starts immediately from the cache.
+5. Trigger the same skill-loading cue more than once. After earlier queued audio finishes, the repeated cue should reuse the cache and avoid another Fish Audio synthesis request.
 6. Run `/jarvis-off`, send another prompt, and confirm the later response is silent.
 7. Open a second session and confirm Jarvis defaults to off there.
 8. Confirm mode commands cause no LLM request and permission behavior remains unchanged.
 
 ## Uninstall
 
-Remove only `file:///home/lmbrandon/videoDemos/opencode-jarvis` or `opencode-jarvis` from the relevant `opencode.json` plugin array. Preserve every unrelated plugin entry.
+Remove only the exact local `file://` URI or `opencode-jarvis` npm entry that you added to the relevant `opencode.json` plugin array. Preserve every unrelated plugin entry.
 
-Optionally remove only the `opencode-jarvis` subdirectory from the OpenCode state directory to delete mode state and cached audio. Do not remove unrelated OpenCode state.
+Exit all OpenCode processes using the plugin before deleting its state. Then, to delete persisted mode state and cached audio, optionally remove only the `opencode-jarvis` subdirectory from the OpenCode state directory. Do not remove unrelated OpenCode state.
 
 ## Scope
 
