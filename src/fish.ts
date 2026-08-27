@@ -43,6 +43,27 @@ export class FishAudioClient {
     text: string,
     signal?: AbortSignal,
   ): Promise<Uint8Array> {
+    const response = await this.requestTts(apiKey, text, signal);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  async synthesizeStream(
+    apiKey: string,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<ReadableStream<Uint8Array>> {
+    const response = await this.requestTts(apiKey, text, signal);
+    if (!response.body) {
+      throw new Error("Fish Audio response had no body to stream");
+    }
+    return response.body;
+  }
+
+  private async requestTts(
+    apiKey: string,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     const response = await this.fetcher(TTS_URL, {
       method: "POST",
       headers: {
@@ -62,7 +83,7 @@ export class FishAudioClient {
       throw await fishAudioError(response, apiKey);
     }
 
-    return new Uint8Array(await response.arrayBuffer());
+    return response;
   }
 }
 

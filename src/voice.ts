@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable, Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 
 import { AudioCache } from "./cache.js";
 import { FishAudioClient } from "./fish.js";
@@ -86,15 +87,25 @@ interface FishSynthesizer {
     text: string,
     signal?: AbortSignal,
   ): Promise<Uint8Array>;
+  synthesizeStream(
+    apiKey: string,
+    text: string,
+    signal?: AbortSignal,
+  ): Promise<ReadableStream<Uint8Array>>;
 }
 
 type AudioPlayer = (file: string, signal: AbortSignal) => Promise<void>;
+type StreamAudioPlayer = (
+  stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+) => Promise<void>;
 
 export interface VoiceServiceOptions {
   stateRoot: string;
   getApiKey: () => string | undefined;
   fish?: FishSynthesizer;
   play?: AudioPlayer;
+  playStream?: StreamAudioPlayer;
   report: ErrorReporter;
 }
 
@@ -102,20 +113,16 @@ export class VoiceService {
   private readonly cache: AudioCache;
   private readonly fish: FishSynthesizer;
   private readonly play: AudioPlayer;
+  private readonly playStream: StreamAudioPlayer;
   private readonly queue: VoiceQueue;
-  private readonly temporaryDirectory: string;
 
   constructor(options: VoiceServiceOptions) {
     this.cache = new AudioCache(
       join(options.stateRoot, "opencode-jarvis", "cache"),
     );
-    this.temporaryDirectory = join(
-      options.stateRoot,
-      "opencode-jarvis",
-      "tmp",
-    );
     this.fish = options.fish ?? new FishAudioClient();
     this.play = options.play ?? playWithFfplay;
+    this.playStream = options.playStream ?? playStreamWithFfplay;
     this.queue = new VoiceQueue(
       (job, signal) => this.process(job, signal, options.getApiKey),
       options.report,
@@ -159,17 +166,9 @@ export class VoiceService {
       return;
     }
 
-    const file = join(this.temporaryDirectory, `${randomUUID()}.mp3`);
-    try {
-      const audio = await this.fish.synthesize(apiKey, job.text, signal);
-      signal.throwIfAborted();
-      await mkdir(this.temporaryDirectory, { recursive: true });
-      await writeFile(file, audio, { mode: 0o600 });
-      signal.throwIfAborted();
-      await this.play(file, signal);
-    } finally {
-      await rm(file, { force: true });
-    }
+    const stream = await this.fish.synthesizeStream(apiKey, job.text, signal);
+    signal.throwIfAborted();
+    await this.playStream(stream, signal);
   }
 }
 
@@ -177,14 +176,44 @@ async function playWithFfplay(
   file: string,
   signal: AbortSignal,
 ): Promise<void> {
-  if (signal.aborted) return;
+  await runFfplay(
+    ["-nodisp", "-autoexit", "-loglevel", "quiet", file],
+    "ignore",
+    signal,
+  );
+}
 
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(
-      "ffplay",
-      ["-nodisp", "-autoexit", "-loglevel", "quiet", file],
-      { stdio: "ignore" },
-    );
+async function playStreamWithFfplay(
+  stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): Promise<void> {
+  await runFfplay(
+    ["-nodisp", "-autoexit", "-loglevel", "quiet", "-f", "mp3", "-i", "pipe:0"],
+    ["pipe", "ignore", "ignore"],
+    signal,
+    (stdin) => {
+      // TypeScript's global `ReadableStream<T>` and node:stream/web's are
+      // structurally near-identical but not assignable to each other due to
+      // generic method variance; this is the same object at runtime.
+      const webStream = stream as unknown as NodeWebReadableStream<Uint8Array>;
+      pipeline(Readable.fromWeb(webStream), stdin).catch(() => {
+        // ffplay may close stdin early (abort, or it finished reading before
+        // the stream drained); exit/close handling below reports failures.
+      });
+    },
+  );
+}
+
+function runFfplay(
+  args: string[],
+  stdio: "ignore" | ["pipe", "ignore", "ignore"],
+  signal: AbortSignal,
+  feedStdin?: (stdin: Writable) => void,
+): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn("ffplay", args, { stdio });
     let settled = false;
     let aborted = false;
     let failure: Error | undefined;
@@ -236,5 +265,6 @@ async function playWithFfplay(
     child.once("close", onClose);
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
+    if (child.stdin) feedStdin?.(child.stdin);
   });
 }

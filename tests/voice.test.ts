@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events"
-import { access, mkdtemp, readdir, rm, stat } from "node:fs/promises"
+import { access, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { PassThrough } from "node:stream"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }))
@@ -167,19 +168,14 @@ describe("VoiceQueue", () => {
 })
 
 describe("VoiceService", () => {
-  it("caches cues but writes repeated replies to distinct private temporary files", async () => {
+  it("caches cues, writing and reusing one private temporary file", async () => {
     const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
-    const fish = { synthesize: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) }
+    const fish = fakeFish()
     const cueFiles: string[] = []
-    const replyFiles: string[] = []
     const modes: number[] = []
     const play = vi.fn().mockImplementation(async (file: string) => {
-      if (dirname(file) === join(root, "opencode-jarvis", "cache")) {
-        cueFiles.push(file)
-      } else {
-        replyFiles.push(file)
-        modes.push((await stat(file)).mode & 0o777)
-      }
+      cueFiles.push(file)
+      modes.push((await stat(file)).mode & 0o777)
     })
     const voice = new VoiceService({
       stateRoot: root,
@@ -195,16 +191,53 @@ describe("VoiceService", () => {
     expect(cueFiles).toHaveLength(2)
     expect(cueFiles[0]).toBe(cueFiles[1])
     expect(dirname(cueFiles[0]!)).toBe(join(root, "opencode-jarvis", "cache"))
+    expect(modes).toEqual([0o600, 0o600])
     await expect(access(cueFiles[0]!)).resolves.toBeUndefined()
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it("streams each reply into playback without writing a temporary file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
+    const streams = [fakeAudioStream(new Uint8Array([1])), fakeAudioStream(new Uint8Array([2]))]
+    const synthesizeStream = vi
+      .fn()
+      .mockResolvedValueOnce(streams[0])
+      .mockResolvedValueOnce(streams[1])
+    const playedStreams: ReadableStream<Uint8Array>[] = []
+    const playStream = vi.fn().mockImplementation(async (stream: ReadableStream<Uint8Array>) => {
+      playedStreams.push(stream)
+    })
+    const voice = new VoiceService({
+      stateRoot: root,
+      getApiKey: () => "secret",
+      fish: fakeFish({ synthesizeStream }),
+      playStream,
+      report: vi.fn(),
+    })
     voice.speakReply("a", "uncached")
     voice.speakReply("a", "uncached")
     await voice.whenIdle()
-    expect(fish.synthesize).toHaveBeenCalledTimes(3)
-    expect(new Set(replyFiles).size).toBe(2)
-    expect(replyFiles.every((file) => dirname(file) === join(root, "opencode-jarvis", "tmp"))).toBe(true)
-    expect(modes).toEqual([0o600, 0o600])
-    await Promise.all(replyFiles.map((file) => expect(access(file)).rejects.toThrow()))
-    expect(await readdir(join(root, "opencode-jarvis", "tmp"))).toEqual([])
+    expect(synthesizeStream).toHaveBeenCalledTimes(2)
+    expect(playedStreams).toEqual(streams)
+    await expect(access(join(root, "opencode-jarvis", "tmp"))).rejects.toThrow()
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it("reports streamed playback failures without creating a temporary directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
+    const report = vi.fn()
+    const voice = new VoiceService({
+      stateRoot: root,
+      getApiKey: () => "secret",
+      fish: fakeFish(),
+      playStream: vi.fn().mockRejectedValue(new Error("playback failed")),
+      report,
+    })
+    voice.speakReply("a", "temporary")
+    await voice.whenIdle()
+
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: "playback failed" }))
+    await expect(access(join(root, "opencode-jarvis", "tmp"))).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
 
@@ -228,58 +261,13 @@ describe("VoiceService", () => {
     }
   })
 
-  it("removes temporary files after playback", async () => {
-    const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
-    const fish = { synthesize: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) }
-    const capturedFiles: string[] = []
-    const play = vi.fn().mockImplementation(async (file: string) => {
-      capturedFiles.push(file)
-    })
-    const voice = new VoiceService({
-      stateRoot: root,
-      getApiKey: () => "secret",
-      fish,
-      play,
-      report: vi.fn(),
-    })
-    voice.speakReply("a", "temporary")
-    await voice.whenIdle()
-    expect(capturedFiles).toHaveLength(1)
-    const tmpFile = capturedFiles[0]!
-    // The temp file should be gone after playback completes
-    await expect(access(tmpFile)).rejects.toThrow()
-    await rm(root, { recursive: true, force: true })
-  })
-
-  it("removes temporary files when injected playback fails", async () => {
-    const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
-    const report = vi.fn()
-    let temporaryFile = ""
-    const voice = new VoiceService({
-      stateRoot: root,
-      getApiKey: () => "secret",
-      fish: { synthesize: vi.fn().mockResolvedValue(new Uint8Array([1])) },
-      play: vi.fn().mockImplementation(async (file: string) => {
-        temporaryFile = file
-        throw new Error("playback failed")
-      }),
-      report,
-    })
-    voice.speakReply("a", "temporary")
-    await voice.whenIdle()
-
-    expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: "playback failed" }))
-    await expect(access(temporaryFile)).rejects.toThrow()
-    await rm(root, { recursive: true, force: true })
-  })
-
   it("dispose clears queued jobs, aborts active work, and waits for idle", async () => {
     const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
-    const fish = { synthesize: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) }
+    const fish = fakeFish()
     let finishPlayback!: () => void
     let playbackAborted = false
-    const play = vi.fn().mockImplementation(
-      (_file: string, signal: AbortSignal) =>
+    const playStream = vi.fn().mockImplementation(
+      (_stream: ReadableStream<Uint8Array>, signal: AbortSignal) =>
         new Promise<void>((resolve) => {
           finishPlayback = resolve
           signal.addEventListener("abort", () => { playbackAborted = true }, { once: true })
@@ -289,12 +277,12 @@ describe("VoiceService", () => {
       stateRoot: root,
       getApiKey: () => "secret",
       fish,
-      play,
+      playStream,
       report: vi.fn(),
     })
     voice.speakReply("a", "active")
     voice.speakReply("a", "should-be-cancelled")
-    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(playStream).toHaveBeenCalledOnce())
     const disposePromise = voice.dispose()
     let disposed = false
     void disposePromise.then(() => { disposed = true })
@@ -305,7 +293,7 @@ describe("VoiceService", () => {
     finishPlayback()
     await disposePromise
     await voice.whenIdle()
-    expect(fish.synthesize).toHaveBeenCalledTimes(1)
+    expect(fish.synthesizeStream).toHaveBeenCalledTimes(1)
     await rm(root, { recursive: true, force: true })
   })
 })
@@ -323,12 +311,11 @@ describe("production ffplay playback", () => {
     const voice = defaultPlayerVoice(root, report)
     voice.speakReply("a", "hello")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
-    const file = spawnMock.mock.calls[0]![1][4] as string
 
     expect(spawnMock).toHaveBeenCalledWith(
       "ffplay",
-      ["-nodisp", "-autoexit", "-loglevel", "quiet", file],
-      { stdio: "ignore" },
+      ["-nodisp", "-autoexit", "-loglevel", "quiet", "-f", "mp3", "-i", "pipe:0"],
+      { stdio: ["pipe", "ignore", "ignore"] },
     )
     child.emit("exit", 0, null)
     child.emit("close", 0, null)
@@ -338,7 +325,6 @@ describe("production ffplay playback", () => {
     expect(child.listenerCount("error")).toBe(0)
     expect(child.listenerCount("exit")).toBe(0)
     expect(child.listenerCount("close")).toBe(0)
-    await expect(access(file)).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
 
@@ -352,7 +338,6 @@ describe("production ffplay playback", () => {
     voice.speakReply("a", "first")
     voice.speakReply("b", "second")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
-    const file = spawnMock.mock.calls[0]![1][4] as string
 
     voice.cancelSession("a")
     const idlePromise = voice.whenIdle()
@@ -365,8 +350,6 @@ describe("production ffplay playback", () => {
     ])
     const callsBeforeClose = spawnMock.mock.calls.length
     const idleBeforeClose = idle
-    let temporaryFileExistsBeforeClose = true
-    await access(file).catch(() => { temporaryFileExistsBeforeClose = false })
 
     child.emit("close", null, "SIGTERM")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2))
@@ -378,12 +361,10 @@ describe("production ffplay playback", () => {
     expect(progressBeforeClose).toBe("pending")
     expect(callsBeforeClose).toBe(1)
     expect(idleBeforeClose).toBe(false)
-    expect(temporaryFileExistsBeforeClose).toBe(true)
     expect(report).not.toHaveBeenCalled()
     expect(child.listenerCount("error")).toBe(0)
     expect(child.listenerCount("exit")).toBe(0)
     expect(child.listenerCount("close")).toBe(0)
-    await expect(access(file)).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
 
@@ -461,7 +442,6 @@ describe("production ffplay playback", () => {
     voice.speakReply("a", "first")
     voice.speakReply("b", "second")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
-    const file = spawnMock.mock.calls[0]![1][4] as string
     vi.useFakeTimers()
 
     try {
@@ -477,8 +457,6 @@ describe("production ffplay playback", () => {
         new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 100)),
       ])
       const idleBeforeClose = idle
-      let temporaryFileExistsBeforeClose = true
-      await access(file).catch(() => { temporaryFileExistsBeforeClose = false })
 
       expect(() => child.emit("error", new Error("late kill error"))).not.toThrow()
       child.emit("close", null, "SIGKILL")
@@ -489,7 +467,6 @@ describe("production ffplay playback", () => {
 
       expect(progressBeforeClose).toBe("pending")
       expect(idleBeforeClose).toBe(false)
-      expect(temporaryFileExistsBeforeClose).toBe(true)
       expect(remainingTimers).toBe(0)
       expect(report).not.toHaveBeenCalled()
       expect(child.listenerCount("error")).toBe(0)
@@ -586,7 +563,6 @@ describe("production ffplay playback", () => {
     const voice = defaultPlayerVoice(root, report)
     voice.speakReply("a", "hello")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
-    const file = spawnMock.mock.calls[0]![1][4] as string
     const error = new Error("spawn failed")
 
     child.emit("error", error)
@@ -599,7 +575,6 @@ describe("production ffplay playback", () => {
     expect(child.listenerCount("error")).toBe(0)
     expect(child.listenerCount("exit")).toBe(0)
     expect(child.listenerCount("close")).toBe(0)
-    await expect(access(file)).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
 
@@ -611,7 +586,6 @@ describe("production ffplay playback", () => {
     const voice = defaultPlayerVoice(root, report)
     voice.speakReply("a", "hello")
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce())
-    const file = spawnMock.mock.calls[0]![1][4] as string
 
     child.emit("exit", 7, null)
     child.emit("close", 7, null)
@@ -620,14 +594,15 @@ describe("production ffplay playback", () => {
     expect(report).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("7") }),
     )
-    await expect(access(file)).rejects.toThrow()
     await rm(root, { recursive: true, force: true })
   })
 })
 
-function fakeChildProcess(): EventEmitter & { kill: ReturnType<typeof vi.fn> } {
-  const child = new EventEmitter() as EventEmitter & { kill: ReturnType<typeof vi.fn> }
+function fakeChildProcess(): EventEmitter & { kill: ReturnType<typeof vi.fn>; stdin: PassThrough } {
+  const child = new EventEmitter() as EventEmitter & { kill: ReturnType<typeof vi.fn>; stdin: PassThrough }
   child.kill = vi.fn().mockReturnValue(true)
+  child.stdin = new PassThrough()
+  child.stdin.on("error", () => {})
   return child
 }
 
@@ -635,7 +610,30 @@ function defaultPlayerVoice(root: string, report: ReturnType<typeof vi.fn>): Voi
   return new VoiceService({
     stateRoot: root,
     getApiKey: () => "secret",
-    fish: { synthesize: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])) },
+    fish: fakeFish(),
     report,
   })
+}
+
+function fakeAudioStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  })
+}
+
+function fakeFish(overrides: {
+  synthesize?: ReturnType<typeof vi.fn>
+  synthesizeStream?: ReturnType<typeof vi.fn>
+} = {}): { synthesize: ReturnType<typeof vi.fn>; synthesizeStream: ReturnType<typeof vi.fn> } {
+  return {
+    synthesize: overrides.synthesize ?? vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    synthesizeStream:
+      overrides.synthesizeStream ??
+      // A fresh stream per call: a ReadableStream can only be read once, and
+      // this default backs every job in a test, not just the first.
+      vi.fn().mockImplementation(async () => fakeAudioStream(new Uint8Array([1, 2, 3]))),
+  }
 }

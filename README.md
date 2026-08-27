@@ -102,7 +102,7 @@ New sessions default to off. Jarvis mode is persisted by OpenCode session ID, so
 While enabled, Jarvis:
 
 - Appends the instruction from `src/prompt.ts` to the session system prompt.
-- Speaks completed assistant replies, stripping fenced code blocks, inline code spans, and markdown formatting (bold, italic, headings, list bullets) first, so replies read as plain prose rather than raw markdown.
+- Speaks completed assistant replies, stripping fenced code blocks, inline code spans, and markdown formatting (bold, italic, headings, list bullets) first, so replies read as plain prose rather than raw markdown. Reply audio streams straight into playback as Fish Audio generates it, rather than waiting for the full response before starting.
 - Speaks a cached greeting when enabled.
 - Announces skill loading, with repeated cues served from the audio cache.
 
@@ -112,7 +112,7 @@ While enabled, Jarvis:
 
 Disabled sessions do not inject prompts, synthesize, play, or cache speech, or alter tool and permission behavior. However, if `FISH_API_KEY` is absent, the TUI performs startup key acquisition and validation independently of per-session mode so Jarvis can later be enabled. The controller remains loaded so Jarvis mode can be re-enabled.
 
-Reusable cues are cached under the OpenCode state directory. Assistant replies use unique temporary MP3 files that are removed after playback. Version 0.1 accepts typed input and produces spoken output only.
+Reusable cues are cached under the OpenCode state directory. Assistant replies are never written to disk: the synthesized audio is piped directly into playback and discarded as it plays. Version 0.1 accepts typed input and produces spoken output only.
 
 ## Security and Permissions
 

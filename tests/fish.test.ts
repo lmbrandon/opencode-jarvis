@@ -95,6 +95,56 @@ describe("FishAudioClient", () => {
     expect(FISH_FORMAT).toBe("mp3");
   });
 
+  test("streams the exact pinned TTS request and returns the raw response body", async () => {
+    const audio = new Uint8Array([0, 1, 127, 128, 255]);
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(audio, { status: 200 }));
+    const signal = new AbortController().signal;
+
+    const stream = await new FishAudioClient(fetcher).synthesizeStream(
+      "secret-key",
+      "Hello, sir.",
+      signal,
+    );
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Uint8Array);
+
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(audio));
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith("https://api.fish.audio/v1/tts", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer secret-key",
+        "Content-Type": "application/json",
+        model: "s2.1-pro-free",
+      },
+      body: JSON.stringify({
+        text: "Hello, sir.",
+        reference_id: "14129c3e320149449d6bada6862f7338",
+        format: "mp3",
+      }),
+      signal,
+    });
+  });
+
+  test("throws a sanitized service error when a streamed request fails", async () => {
+    const apiKey = "stream-secret-never-expose";
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(`service unavailable for ${apiKey}`, { status: 500 }),
+      );
+
+    const error = await new FishAudioClient(fetcher)
+      .synthesizeStream(apiKey, "Hello")
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(FishAudioError);
+    expect(error).toMatchObject({ status: 500 });
+    expect((error as Error).message).not.toContain(apiKey);
+  });
+
   test("bounds and cancels an oversized error body without exposing the API key", async () => {
     const apiKey = "fish-secret-never-expose";
     const encoder = new TextEncoder();
