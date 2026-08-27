@@ -26,6 +26,8 @@ npm run build
 
 OpenCode loads server and TUI plugins from separate configuration files. Add the package directory to both files without removing unrelated plugins.
 
+Use the absolute `file://` URI of your clone. Substitute your own checkout path for `/absolute/path/to/opencode-jarvis` below.
+
 Register the server module in the project `opencode.json`:
 
 ```json
@@ -33,7 +35,7 @@ Register the server module in the project `opencode.json`:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     "superpowers@git+https://github.com/obra/superpowers.git",
-    "file:///home/lmbrandon/videoDemos/opencode-jarvis"
+    "file:///absolute/path/to/opencode-jarvis"
   ]
 }
 ```
@@ -43,11 +45,11 @@ Register the native commands and speech integration in the project `tui.json`:
 ```json
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["file:///home/lmbrandon/videoDemos/opencode-jarvis"]
+  "plugin": ["file:///absolute/path/to/opencode-jarvis"]
 }
 ```
 
-This example uses the approved checkout path. On another machine or in another checkout, replace it with the absolute `file://` URI for that clone in both files. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration. Quit and restart OpenCode after changing either config file.
+OpenCode plugin entries require an absolute `file://` URI, so this value is specific to each checkout and machine. `opencode.json` and `tui.json` are git-ignored for that reason; create them locally from the snippets above. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration. Quit and restart OpenCode after changing either config file.
 
 ## npm Installation
 
@@ -122,7 +124,7 @@ Reusable cues are cached under the OpenCode state directory. Assistant replies u
 
 ## Manual Smoke Test
 
-1. Build the package with `npm run build`, configure the local plugin URI in both `opencode.json` and `tui.json`, and start OpenCode with `FISH_API_KEY` set.
+1. Build the package with `npm run build`, configure your checkout's `file://` plugin URI in both `opencode.json` and `tui.json`, and start OpenCode with `FISH_API_KEY` set.
 2. Run `/jarvis-status` in a session and confirm it reports off.
 3. Run `/jarvis-on` and confirm the enabled toast and greeting.
 4. Send a typed prompt and confirm the completed assistant reply is spoken.

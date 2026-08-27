@@ -82,7 +82,7 @@ describe("installation documentation", () => {
       "utf8",
     );
     const examples = jsonExamples(readme);
-    const localPackageSpec = "file:///home/lmbrandon/videoDemos/opencode-jarvis";
+    const localPackageSpec = "file:///absolute/path/to/opencode-jarvis";
 
     expect(examples).toContainEqual({
       $schema: "https://opencode.ai/config.json",
