@@ -10,10 +10,8 @@ coverage
 *.mp3
 *.tmp
 
-# Local OpenCode plugin registration — machine-specific file:// paths,
-# not part of the published package. See README "Local Installation".
+# Local OpenCode plugin registration — machine-specific file:// paths.
 opencode.json
-tui.json
 
 # Skills materialized from skills-lock.json for each agent runtime
 .agents/
@@ -22,5 +20,5 @@ tui.json
 .claude/worktrees/
 
 # Local working notes and manual test scratch
-HANDOFF.md
-testing/
+testing/*
+!testing/smoke-v2.mjs
