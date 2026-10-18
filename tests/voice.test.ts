@@ -178,7 +178,7 @@ describe("VoiceService", () => {
       modes.push((await stat(file)).mode & 0o777)
     })
     const voice = new VoiceService({
-      stateRoot: root,
+      cacheDirectory: root,
       getApiKey: () => "secret",
       fish,
       play,
@@ -190,7 +190,7 @@ describe("VoiceService", () => {
     expect(fish.synthesize).toHaveBeenCalledTimes(1)
     expect(cueFiles).toHaveLength(2)
     expect(cueFiles[0]).toBe(cueFiles[1])
-    expect(dirname(cueFiles[0]!)).toBe(join(root, "opencode-jarvis", "cache"))
+    expect(dirname(cueFiles[0]!)).toBe(root)
     expect(modes).toEqual([0o600, 0o600])
     await expect(access(cueFiles[0]!)).resolves.toBeUndefined()
     await rm(root, { recursive: true, force: true })
@@ -208,7 +208,7 @@ describe("VoiceService", () => {
       playedStreams.push(stream)
     })
     const voice = new VoiceService({
-      stateRoot: root,
+      cacheDirectory: root,
       getApiKey: () => "secret",
       fish: fakeFish({ synthesizeStream }),
       playStream,
@@ -227,7 +227,7 @@ describe("VoiceService", () => {
     const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
     const report = vi.fn()
     const voice = new VoiceService({
-      stateRoot: root,
+      cacheDirectory: root,
       getApiKey: () => "secret",
       fish: fakeFish(),
       playStream: vi.fn().mockRejectedValue(new Error("playback failed")),
@@ -246,7 +246,7 @@ describe("VoiceService", () => {
     const root = await mkdtemp(join(tmpdir(), "jarvis-voice-"))
     try {
       const voice = new VoiceService({
-        stateRoot: root,
+        cacheDirectory: root,
         getApiKey: () => undefined,
         play: vi.fn().mockResolvedValue(undefined),
         report,
@@ -274,7 +274,7 @@ describe("VoiceService", () => {
         }),
     )
     const voice = new VoiceService({
-      stateRoot: root,
+      cacheDirectory: root,
       getApiKey: () => "secret",
       fish,
       playStream,
@@ -608,7 +608,7 @@ function fakeChildProcess(): EventEmitter & { kill: ReturnType<typeof vi.fn>; st
 
 function defaultPlayerVoice(root: string, report: ReturnType<typeof vi.fn>): VoiceService {
   return new VoiceService({
-    stateRoot: root,
+    cacheDirectory: root,
     getApiKey: () => "secret",
     fish: fakeFish(),
     report,

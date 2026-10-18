@@ -1,8 +1,14 @@
-import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import { homedir } from "node:os";
 
-import { createJarvisController } from "./controller.js";
+import { Plugin } from "@opencode/plugin/tui";
+
+import { resolveCacheDirectory } from "./cache-path.js";
+import {
+  createJarvisController,
+  type SessionRef,
+} from "./controller.js";
 import { FishAudioClient } from "./fish.js";
-import { SessionStateStore } from "./state.js";
+import { JarvisRpc } from "./rpc.js";
 import { VoiceService } from "./voice.js";
 
 interface JarvisActions {
@@ -15,60 +21,97 @@ interface JarvisActions {
 export function jarvisCommands(actions: JarvisActions) {
   return [
     {
-      name: "jarvis.toggle",
+      id: "jarvis.toggle",
       title: "Toggle Jarvis",
-      desc: "Toggle Jarvis for this session",
-      slashName: "jarvis",
-      namespace: "palette",
-      category: "Jarvis",
+      description: "Toggle Jarvis for this session",
+      group: "Jarvis",
+      palette: true as const,
+      slash: { name: "jarvis" },
       run: actions.toggle,
     },
     {
-      name: "jarvis.enable",
+      id: "jarvis.enable",
       title: "Enable Jarvis",
-      desc: "Enable Jarvis for this session",
-      slashName: "jarvis-on",
-      namespace: "palette",
-      category: "Jarvis",
+      description: "Enable Jarvis for this session",
+      group: "Jarvis",
+      palette: true as const,
+      slash: { name: "jarvis-on" },
       run: actions.enable,
     },
     {
-      name: "jarvis.disable",
+      id: "jarvis.disable",
       title: "Disable Jarvis",
-      desc: "Disable Jarvis for this session",
-      slashName: "jarvis-off",
-      namespace: "palette",
-      category: "Jarvis",
+      description: "Disable Jarvis for this session",
+      group: "Jarvis",
+      palette: true as const,
+      slash: { name: "jarvis-off" },
       run: actions.disable,
     },
     {
-      name: "jarvis.status",
+      id: "jarvis.status",
       title: "Jarvis status",
-      desc: "Show Jarvis state for this session",
-      slashName: "jarvis-status",
-      namespace: "palette",
-      category: "Jarvis",
+      description: "Show Jarvis state for this session",
+      group: "Jarvis",
+      palette: true as const,
+      slash: { name: "jarvis-status" },
       run: actions.status,
     },
   ];
 }
 
-export const JarvisTui: TuiPlugin = async (api) => {
+function sessionRef(
+  context: Plugin.Context,
+  sessionID: string,
+  eventLocation?: SessionRef["location"],
+  allowContextFallback = false,
+): SessionRef | undefined {
+  const cached = context.data.session.get(sessionID);
+  const location =
+    eventLocation ??
+    cached?.location ??
+    (allowContextFallback
+      ? context.location ?? context.data.location.default()
+      : undefined);
+  if (!location) return undefined;
+  const workspaceID =
+    "workspaceID" in location && typeof location.workspaceID === "string"
+      ? location.workspaceID
+      : undefined;
+  return {
+    id: sessionID,
+    location: {
+      directory: location.directory,
+      ...(workspaceID ? { workspaceID } : {}),
+    },
+  };
+}
+
+function enabledResult(value: unknown): boolean {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("enabled" in value) ||
+    typeof value.enabled !== "boolean"
+  ) {
+    throw new Error("Jarvis RPC returned an invalid response");
+  }
+  return value.enabled;
+}
+
+export async function setupJarvisTui(context: Plugin.Context) {
+  const rpc = context.client.rpc(JarvisRpc);
   const environmentKey = process.env.FISH_API_KEY?.trim();
   let apiKey = environmentKey || undefined;
-  const startupController = new AbortController();
-  let startupTask = Promise.resolve();
   let disposed = false;
-  let closeKeyDialog: (() => void) | undefined;
-  const stateRoot = api.state.path.state;
-  const state = new SessionStateStore(stateRoot);
+  let ownsKeyPrompt = false;
+  const startupController = new AbortController();
+  const lifetimeController = new AbortController();
+  const eventTasks = new Set<Promise<void>>();
   const fish = new FishAudioClient();
   const toast = (
     message: string,
     variant: "info" | "success" | "warning" | "error",
-  ): void => {
-    api.ui.toast({ title: "Jarvis", message, variant });
-  };
+  ): void => context.ui.toast.show({ title: "Jarvis", message, variant });
   const report = (error: unknown, sensitive?: string): void => {
     if (disposed) return;
     let message =
@@ -85,135 +128,210 @@ export const JarvisTui: TuiPlugin = async (api) => {
     }
     message = message.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
     if (!message) message = "Unexpected Jarvis error";
-
     toast(message, "error");
-    try {
-      void api.client.app
-        .log({ service: "opencode-jarvis", level: "error", message })
-        .catch(() => undefined);
-    } catch {}
+    console.error(`[opencode-jarvis] ${message}`);
   };
   const voice = new VoiceService({
-    stateRoot,
+    cacheDirectory: resolveCacheDirectory({
+      env: process.env,
+      platform: process.platform,
+      home: homedir(),
+    }),
     getApiKey: () => apiKey,
     fish,
     report,
   });
+  const ensureActive = (): void => {
+    if (!disposed) return;
+    const error = new Error("Jarvis terminal plugin is disposed");
+    error.name = "AbortError";
+    throw error;
+  };
+  const state = {
+    async isEnabled(session: SessionRef): Promise<boolean> {
+      ensureActive();
+      const result = enabledResult(
+        await rpc.status(
+          { sessionID: session.id },
+          {
+            location: session.location as never,
+            signal: lifetimeController.signal,
+          },
+        ),
+      );
+      ensureActive();
+      return result;
+    },
+    async setEnabled(
+      session: SessionRef,
+      enabled: boolean,
+    ): Promise<boolean> {
+      ensureActive();
+      const result = enabledResult(
+        await rpc.set(
+          { sessionID: session.id, enabled },
+          {
+            location: session.location as never,
+            signal: lifetimeController.signal,
+          },
+        ),
+      );
+      ensureActive();
+      return result;
+    },
+    async toggle(session: SessionRef): Promise<boolean> {
+      ensureActive();
+      const result = enabledResult(
+        await rpc.toggle(
+          { sessionID: session.id },
+          {
+            location: session.location as never,
+            signal: lifetimeController.signal,
+          },
+        ),
+      );
+      ensureActive();
+      return result;
+    },
+  };
   const controller = createJarvisController({
     state,
     voice,
     toast,
-    getSessionID: () => {
-      const route = api.route.current;
-      return route.name === "session" &&
-        route.params &&
-        typeof route.params.sessionID === "string"
-        ? route.params.sessionID
+    getSession: () => {
+      const route = context.ui.router.current();
+      return route.type === "session"
+        ? sessionRef(context, route.sessionID, undefined, true)
         : undefined;
     },
   });
-  const guardCommand =
-    (action: () => Promise<void>) => async (): Promise<void> => {
-      try {
-        await action();
-      } catch (error) {
-        report(error);
-      }
-    };
-  const unregisterCommands = api.keymap.registerLayer({
+  const guard = (action: () => Promise<void>) => async (): Promise<void> => {
+    try {
+      await action();
+    } catch (error) {
+      report(error);
+    }
+  };
+  const trackEvent = (task: Promise<void>): void => {
+    const handled = task.catch(report);
+    eventTasks.add(handled);
+    void handled.finally(() => eventTasks.delete(handled));
+  };
+
+  context.keymap.layer(() => ({
+    mode: "global",
     commands: jarvisCommands({
-      toggle: guardCommand(controller.toggle),
-      enable: guardCommand(controller.enable),
-      disable: guardCommand(controller.disable),
-      status: guardCommand(controller.status),
+      toggle: guard(controller.toggle),
+      enable: guard(controller.enable),
+      disable: guard(controller.disable),
+      status: guard(controller.status),
     }),
-  });
-  const unsubscribeIdle = api.event.on("session.idle", (event) => {
-    const sessionID = event.properties.sessionID;
-    void Promise.resolve()
-      .then(() =>
-        controller.sessionIdle(
-          sessionID,
-          api.state.session.messages(sessionID),
-          api.state.part,
-        ),
-      )
-      .catch(report);
-  });
-  const unsubscribePart = api.event.on("message.part.updated", (event) => {
-    void Promise.resolve()
-      .then(() => controller.partUpdated(event.properties.part))
-      .catch(report);
-  });
-  api.lifecycle.onDispose(async () => {
-    disposed = true;
-    startupController.abort();
-    closeKeyDialog?.();
-    unregisterCommands();
-    unsubscribeIdle();
-    unsubscribePart();
-    await Promise.all([startupTask, voice.dispose()]);
+  }));
+
+  const stopExecution = context.data.on(
+    "session.execution.succeeded",
+    (event) => {
+      if (disposed) return;
+      trackEvent((async () => {
+        const session = sessionRef(
+          context,
+          event.data.sessionID,
+          event.location,
+        );
+        if (!session) return;
+        await context.data.session.message.sync(session.id);
+        ensureActive();
+        const messages = context.data.session.message.list(session.id);
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+          const message = messages[index];
+          if (
+            !message ||
+            message.type !== "assistant" ||
+            !message.time.completed ||
+            message.error
+          ) {
+            continue;
+          }
+          const text = message.content
+            .flatMap((part) =>
+              part.type === "text" && part.text.trim()
+                ? [part.text.trim()]
+                : [],
+            )
+            .join("\n");
+          await controller.replyCompleted(session, message.id, text);
+          return;
+        }
+      })());
+    },
+  );
+  const stopSkill = context.data.on("session.skill.activated", (event) => {
+    if (disposed) return;
+    const session = sessionRef(
+      context,
+      event.data.sessionID,
+      event.location,
+    );
+    if (!session) return;
+    trackEvent(controller.skillActivated(session, event.id, event.data.name));
   });
 
+  let startupTask = Promise.resolve();
   if (!apiKey) {
     startupTask = (async () => {
-      const candidate = await new Promise<string | undefined>((resolve) => {
-        let settled = false;
-        let ownsDialog = true;
-        const settle = (
-          value: string | undefined,
-          clearOwnedDialog = true,
-        ): void => {
-          if (settled) return;
-          settled = true;
-          closeKeyDialog = undefined;
-          const shouldClear = clearOwnedDialog && ownsDialog;
-          ownsDialog = false;
-          if (shouldClear) api.ui.dialog.clear();
-          resolve(value);
-        };
-        closeKeyDialog = () => settle(undefined);
-
-        api.ui.dialog.replace(
-          () =>
-            api.ui.DialogPrompt({
-              title: "Fish Audio API key",
-              placeholder: "Enter FISH_API_KEY",
-              onConfirm: (value) => settle(value.trim() || undefined),
-              onCancel: () => settle(undefined),
-            }),
-          () => settle(undefined, false),
-        );
-      });
-
+      ownsKeyPrompt = true;
+      const candidate = (
+        await context.ui.dialog.prompt({
+          title: "Fish Audio API key",
+          placeholder: "Enter FISH_API_KEY",
+        })
+      )?.trim();
+      ownsKeyPrompt = false;
       if (disposed) return;
       if (!candidate) {
         toast(
           "Speech is unavailable until FISH_API_KEY is configured",
           "warning",
         );
-      } else {
-        try {
-          const valid = await fish.validateKey(
-            candidate,
-            startupController.signal,
-          );
-          if (disposed) return;
-          if (valid) {
-            apiKey = candidate;
-            toast("Fish Audio is ready", "success");
-          } else {
-            toast("Fish Audio rejected that API key", "error");
-          }
-        } catch (error) {
-          report(error, candidate);
+        return;
+      }
+      try {
+        const valid = await fish.validateKey(
+          candidate,
+          startupController.signal,
+        );
+        if (disposed) return;
+        if (valid) {
+          apiKey = candidate;
+          toast("Fish Audio is ready", "success");
+        } else {
+          toast("Fish Audio rejected that API key", "error");
         }
+      } catch (error) {
+        if (!startupController.signal.aborted) report(error, candidate);
       }
     })().catch(report);
   }
-};
 
-export default {
-  id: "opencode-jarvis",
-  tui: JarvisTui,
-} satisfies TuiPluginModule;
+  let cleanupTask: Promise<void> | undefined;
+  return (): Promise<void> => {
+    if (cleanupTask) return cleanupTask;
+    disposed = true;
+    startupController.abort();
+    lifetimeController.abort();
+    if (ownsKeyPrompt) context.ui.dialog.clear();
+    stopExecution();
+    stopSkill();
+    cleanupTask = Promise.all([
+      startupTask,
+      ...eventTasks,
+      voice.dispose(),
+    ]).then(() => undefined);
+    return cleanupTask;
+  };
+}
+
+export default Plugin.define({
+  id: "opencode-jarvis.tui",
+  setup: setupJarvisTui,
+});

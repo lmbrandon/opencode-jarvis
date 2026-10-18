@@ -1,90 +1,52 @@
 # opencode-jarvis
 
-Session-specific Jarvis mode for OpenCode 1.18.22 with Fish Audio speech.
+Session-specific Jarvis mode for OpenCode 2 with Fish Audio speech.
 
 ## Requirements
 
-- OpenCode 1.18.22 or newer
-- Node.js and npm for development
-- `ffplay` available on `PATH`
+- OpenCode 2
+- `ffplay` available on the terminal host's `PATH`
 - A Fish Audio API key
+- Node.js and npm for source development
 
-## Development
+## Install from npm
+
+Add the published package to the `plugins` array in `opencode.json` without removing unrelated plugins:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["opencode-jarvis"]
+}
+```
+
+The package root provides the server plugin, and its `./tui` export is discovered automatically for commands and speech. Restart OpenCode after changing the configuration.
+
+## Local development installation
+
+Install dependencies and build the package:
 
 ```sh
 npm install
-npm run check
-```
-
-## Local Installation
-
-Build the package:
-
-```sh
 npm run build
 ```
 
-OpenCode loads server and TUI plugins from separate configuration files. Add the package directory to both files without removing unrelated plugins.
-
-Use the absolute `file://` URI of your clone. Substitute your own checkout path for `/absolute/path/to/opencode-jarvis` below.
-
-Register the server module in the project `opencode.json`:
+Then add the checkout's absolute `file://` URI to `opencode.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git",
-    "file:///absolute/path/to/opencode-jarvis"
-  ]
+  "plugins": ["file:///absolute/path/to/opencode-jarvis"]
 }
 ```
 
-Register the native commands and speech integration in the project `tui.json`:
+This local-path form is for a same-machine server and terminal. When the terminal connects to a remote OpenCode server, use the published package name and make the package available on both hosts; an absolute path from one host is not shared with the other.
 
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["file:///absolute/path/to/opencode-jarvis"]
-}
-```
+## Fish Audio key
 
-OpenCode plugin entries require an absolute `file://` URI, so this value is specific to each checkout and machine. `opencode.json` and `tui.json` are git-ignored for that reason; create them locally from the snippets above. Installing or running `opencode-jarvis` does not rewrite OpenCode configuration. Quit and restart OpenCode after changing either config file.
+Set `FISH_API_KEY` in the terminal process environment when possible. If it is absent, the terminal plugin prompts at startup, validates the entered key, and retains a valid key in memory only for that process.
 
-## npm Installation
-
-After the package is published, preserve existing plugins and add `opencode-jarvis` to both runtime configurations.
-
-`opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "superpowers@git+https://github.com/obra/superpowers.git",
-    "opencode-jarvis"
-  ]
-}
-```
-
-`tui.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["opencode-jarvis"]
-}
-```
-
-Quit and restart OpenCode after changing either config file.
-
-## Fish Audio Key
-
-Set `FISH_API_KEY` in the environment when possible. If it is absent, the plugin prompts at startup, validates the entered key, and retains a valid key in memory only for the running OpenCode process.
-
-OpenCode 1.18.22 does not password-mask this prompt, so typed input can be visible. Prefer the environment variable, especially when screen sharing or working in a public space. Never store a key in either `opencode.json` or `tui.json`.
-
-Fish Audio is a remote service. While Jarvis is enabled, the plugin sends the complete text of assistant replies and reusable cue text to Fish Audio for speech synthesis. Skill-loading cue text includes the skill name. Fish Audio's privacy and retention terms apply to this content. The plugin also sends the API key to Fish Audio when validating a prompted key and authenticating synthesis requests.
+Fish Audio is a remote service. While Jarvis is enabled, complete assistant replies and reusable cue text, including skill names, are sent to Fish Audio for speech synthesis. Fish Audio's privacy and retention terms apply. The API key is sent only to Fish Audio for validation and synthesis; it is not stored in server plugin state or the audio cache.
 
 ## Commands
 
@@ -93,52 +55,56 @@ Fish Audio is a remote service. While Jarvis is enabled, the plugin sends the co
 - `/jarvis-off`: disable Jarvis mode for the current session.
 - `/jarvis-status`: show whether Jarvis mode is enabled for the current session.
 
-OpenCode 1.18.22 native command callbacks do not receive arguments. The hyphenated commands therefore replace `/jarvis on`, `/jarvis off`, and `/jarvis status`. These commands remain local and do not cause an LLM request.
+The commands run locally through the terminal plugin and do not cause a model request.
 
 ## Behavior
 
-New sessions default to off. Jarvis mode is persisted by OpenCode session ID, so reopening or resuming an enabled session leaves it enabled until it is turned off. A resumed enabled session can therefore send reply and skill-loading cue text to Fish Audio and play the resulting speech.
+New sessions default to off. OpenCode 2 stores mode per session through server plugin storage, so the state works with remote terminal connections and persists when a session is reopened. State from an earlier OpenCode installation is intentionally not migrated: after upgrading, existing sessions start disabled once and then persist subsequent OpenCode 2 changes normally.
 
 While enabled, Jarvis:
 
-- Appends the instruction from `src/prompt.ts` to the session system prompt.
-- Speaks completed assistant replies, stripping fenced code blocks, inline code spans, and markdown formatting (bold, italic, headings, list bullets) first, so replies read as plain prose rather than raw markdown. Reply audio streams straight into playback as Fish Audio generates it, rather than waiting for the full response before starting.
-- Speaks a cached greeting when enabled.
-- Announces skill loading, with repeated cues served from the audio cache.
+- Appends the instruction from `src/prompt.ts` to model context.
+- Speaks each completed assistant reply once after removing code and Markdown formatting.
+- Speaks a greeting when enabled.
+- Announces each skill activation, with reusable cues served from the audio cache.
 
-`src/prompt.ts` is editable in a source checkout for development builds. The npm package does not include source files, so npm consumers who want to customize this instruction must use a source checkout and rebuild.
+Disabling Jarvis cancels queued audio for that session and prevents stale asynchronous work from speaking. Disabled sessions do not inject the Jarvis instruction, synthesize speech, play audio, or cache new cues. The plugin does not change OpenCode permissions or approve actions.
 
-`src/prompt.ts` also invites the model to add Fish Audio emotion tags (e.g. `[excited]`, `[chuckle]`) in square brackets for more expressive delivery. This is experimental: the tags are sent to Fish Audio as part of the reply text, unstripped, and only their effect on delivery is being evaluated.
+Version 0.1 accepts typed input and produces spoken output only; it has no microphone or speech-to-text access.
 
-Disabled sessions do not inject prompts, synthesize, play, or cache speech, or alter tool and permission behavior. However, if `FISH_API_KEY` is absent, the TUI performs startup key acquisition and validation independently of per-session mode so Jarvis can later be enabled. The controller remains loaded so Jarvis mode can be re-enabled.
+## Cache locations
 
-Reusable cues are cached under the OpenCode state directory. Assistant replies are never written to disk: the synthesized audio is piped directly into playback and discarded as it plays. Version 0.1 accepts typed input and produces spoken output only.
+Assistant replies stream directly to playback and are not written to disk. Reusable cue audio is stored on the terminal host under:
 
-## Security and Permissions
+- `$XDG_CACHE_HOME/opencode-jarvis` when `XDG_CACHE_HOME` is set;
+- `%LOCALAPPDATA%\opencode-jarvis` on Windows otherwise;
+- `~/.cache/opencode-jarvis` on other platforms otherwise.
 
-- The plugin has no microphone or speech-to-text access.
-- It does not install a permission hook, bypass permissions, or automatically approve actions.
-- A key entered at the startup prompt is retained in memory only after validation.
-- Because OpenCode 1.18.22 can display prompt input, using `FISH_API_KEY` is recommended.
-- Reply and cue text sent for synthesis is subject to Fish Audio's privacy and retention terms.
+## Development and verification
 
-## Manual Smoke Test
+Run the complete source, build, test, and package checks:
 
-1. Build the package with `npm run build`, configure your checkout's `file://` plugin URI in both `opencode.json` and `tui.json`, and start OpenCode with `FISH_API_KEY` set.
+```sh
+npm run check
+```
+
+To verify an installed packed artifact:
+
+```sh
+npm pack --json
+npm run smoke:v2 -- ./opencode-jarvis-0.1.0.tgz
+```
+
+## Manual smoke test
+
+1. Build and configure the plugin, then start OpenCode with `FISH_API_KEY` set.
 2. Run `/jarvis-status` in a session and confirm it reports off.
 3. Run `/jarvis-on` and confirm the enabled toast and greeting.
-4. Send a typed prompt and confirm the completed assistant reply is spoken.
-5. Trigger the same skill-loading cue more than once. After earlier queued audio finishes, the repeated cue should reuse the cache and avoid another Fish Audio synthesis request.
+4. Send a prompt and confirm the completed assistant reply is spoken once.
+5. Trigger the same skill more than once and confirm each activation is announced.
 6. Run `/jarvis-off`, send another prompt, and confirm the later response is silent.
 7. Open a second session and confirm Jarvis defaults to off there.
-8. Confirm mode commands cause no LLM request and permission behavior remains unchanged.
 
 ## Uninstall
 
-Remove only the exact local `file://` URI or `opencode-jarvis` npm entry that you added to the relevant `opencode.json` and `tui.json` plugin arrays. Preserve every unrelated plugin entry.
-
-Exit all OpenCode processes using the plugin before deleting its state. Then, to delete persisted mode state and cached audio, optionally remove only the `opencode-jarvis` subdirectory from the OpenCode state directory. Do not remove unrelated OpenCode state.
-
-## Scope
-
-Version 0.1 provides typed input and spoken output. It excludes microphone input, speech-to-text, long-term memory, home automation, and permission automation.
+Remove only the exact `opencode-jarvis` or local `file://` entry from the `plugins` array in `opencode.json`, preserving unrelated entries, and restart OpenCode. OpenCode owns the server-side plugin storage. To remove cached cue audio, delete only the terminal host's `opencode-jarvis` cache directory listed above.

@@ -3,6 +3,9 @@ node_modules
 dist
 coverage
 
+# Generated architecture graphs and extraction caches
+graphify-out/
+
 # Secrets
 .env
 

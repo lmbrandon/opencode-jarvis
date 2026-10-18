@@ -1,122 +1,168 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { describe, expect, test, vi } from "vitest";
 
-import type { PluginInput } from "@opencode-ai/plugin";
-import { afterEach, describe, expect, test, vi } from "vitest";
-
-import { createSystemTransform, JarvisEngine } from "../src/engine.js";
+import plugin from "../src/index.js";
+import { setupJarvisServer } from "../src/engine.js";
 import { JARVIS_SYSTEM_INSTRUCTION } from "../src/prompt.js";
-import { SessionStateStore } from "../src/state.js";
+import { JarvisRpc } from "../src/rpc.js";
 
-describe("Jarvis system transform", () => {
-  test("leaves existing system instructions unchanged while disabled", async () => {
-    const isEnabled = vi.fn().mockResolvedValue(false);
-    const transform = createSystemTransform({ isEnabled });
-    const system = ["existing\nbytes", "second instruction"];
-    const output = { system };
+interface RpcContext {
+  error(type: string, message: string, data: object): unknown;
+}
 
-    await transform({ sessionID: "session-a" }, output);
+interface RpcHandlers {
+  status(input: unknown, context: RpcContext): Promise<unknown>;
+  set(input: unknown, context: RpcContext): Promise<unknown>;
+  toggle(input: unknown, context: RpcContext): Promise<unknown>;
+}
 
-    expect(output.system).toBe(system);
-    expect(output.system).toEqual(["existing\nbytes", "second instruction"]);
+function createContext() {
+  const values = new Map<string, unknown>();
+  const storage = {
+    get: vi.fn(async (key: string) => values.get(key)),
+    set: vi.fn(async (key: string, value: unknown) => {
+      values.set(key, value);
+    }),
+    remove: vi.fn(async (key: string) => {
+      values.delete(key);
+    }),
+  };
+  let handlers: RpcHandlers | undefined;
+  let contextHook: ((event: { sessionID: string; system: unknown[] }) => Promise<void>) | undefined;
+  const rpc = {
+    register: vi.fn(async (_definition: unknown, registered: RpcHandlers) => {
+      handlers = registered;
+      return { dispose: vi.fn(), events: { emit: vi.fn() } };
+    }),
+  };
+  const session = {
+    hook: vi.fn(async (_name: string, hook: typeof contextHook) => {
+      contextHook = hook;
+      return { dispose: vi.fn() };
+    }),
+  };
+
+  return {
+    ctx: { storage, rpc, session },
+    storage,
+    values,
+    rpc,
+    session,
+    getHandlers: () => handlers,
+    getContextHook: () => contextHook,
+  };
+}
+
+function rpcContext() {
+  return {
+    error: vi.fn((type: string, message: string, data: object) => ({
+      type,
+      message,
+      data,
+    })),
+  };
+}
+
+describe("setupJarvisServer", () => {
+  test("registers one RPC and one context hook", async () => {
+    const harness = createContext();
+
+    await setupJarvisServer(harness.ctx as never);
+
+    expect(harness.rpc.register).toHaveBeenCalledOnce();
+    expect(harness.rpc.register).toHaveBeenCalledWith(JarvisRpc, expect.any(Object));
+    expect(harness.session.hook).toHaveBeenCalledOnce();
+    expect(harness.session.hook).toHaveBeenCalledWith("context", expect.any(Function));
   });
 
-  test("appends exactly the Jarvis instruction while enabled", async () => {
-    const transform = createSystemTransform({
-      isEnabled: vi.fn().mockResolvedValue(true),
-    });
-    const system = ["existing"];
-    const output = { system };
+  test("leaves structured system parts unchanged while disabled", async () => {
+    const harness = createContext();
+    await setupJarvisServer(harness.ctx as never);
+    const system = [{ type: "text", text: "existing" }];
 
-    await transform({ sessionID: "session-a" }, output);
+    await harness.getContextHook()?.({ sessionID: "session-a", system });
 
-    expect(output.system).toBe(system);
-    expect(output.system).toEqual(["existing", JARVIS_SYSTEM_INSTRUCTION]);
+    expect(system).toEqual([{ type: "text", text: "existing" }]);
   });
 
-  test("creates the system list when enabled output has none", async () => {
-    const transform = createSystemTransform({
-      isEnabled: vi.fn().mockResolvedValue(true),
-    });
-    const output: { system?: string[] } = {};
+  test("appends the Jarvis system part while enabled", async () => {
+    const harness = createContext();
+    harness.values.set("session/session-a/enabled", true);
+    await setupJarvisServer(harness.ctx as never);
+    const system = [{ type: "text", text: "existing" }];
 
-    await transform({ sessionID: "session-a" }, output);
+    await harness.getContextHook()?.({ sessionID: "session-a", system });
 
-    expect(output.system).toEqual([JARVIS_SYSTEM_INSTRUCTION]);
+    expect(system).toEqual([
+      { type: "text", text: "existing" },
+      { type: "text", text: JARVIS_SYSTEM_INSTRUCTION },
+    ]);
   });
 
-  test("does not read state or mutate output without a session ID", async () => {
-    const isEnabled = vi.fn().mockResolvedValue(true);
-    const transform = createSystemTransform({ isEnabled });
-    const output: { system?: string[] } = {};
+  test("fails closed when storage reads fail during prompt construction", async () => {
+    const harness = createContext();
+    harness.storage.get.mockRejectedValueOnce(new Error("storage offline"));
+    await setupJarvisServer(harness.ctx as never);
+    const system = [{ type: "text", text: "existing" }];
 
-    await transform({}, output);
-
-    expect(isEnabled).not.toHaveBeenCalled();
-    expect(output).toEqual({});
+    await expect(
+      harness.getContextHook()?.({ sessionID: "session-a", system }),
+    ).resolves.toBeUndefined();
+    expect(system).toEqual([{ type: "text", text: "existing" }]);
   });
+
+  test("implements status, set, and toggle RPC methods", async () => {
+    const harness = createContext();
+    await setupJarvisServer(harness.ctx as never);
+    const handlers = harness.getHandlers()!;
+    const context = rpcContext();
+
+    await expect(
+      handlers.status({ sessionID: "session-a" }, context),
+    ).resolves.toEqual({ enabled: false });
+    await expect(
+      handlers.set({ sessionID: "session-a", enabled: true }, context),
+    ).resolves.toEqual({ enabled: true });
+    await expect(
+      handlers.toggle({ sessionID: "session-a" }, context),
+    ).resolves.toEqual({ enabled: false });
+  });
+
+  test.each(["status", "set", "toggle"] as const)(
+    "maps %s storage failures to storage_error",
+    async (method) => {
+      const harness = createContext();
+      await setupJarvisServer(harness.ctx as never);
+      const handlers = harness.getHandlers()!;
+      const context = rpcContext();
+      if (method === "set") {
+        harness.storage.set.mockRejectedValueOnce(new Error("storage offline"));
+      } else {
+        harness.storage.get.mockRejectedValueOnce(new Error("storage offline"));
+      }
+      const input =
+        method === "set"
+          ? { sessionID: "session-a", enabled: true }
+          : { sessionID: "session-a" };
+
+      await expect(handlers[method](input, context)).resolves.toEqual({
+        type: "storage_error",
+        message: "storage offline",
+        data: {},
+      });
+      expect(context.error).toHaveBeenCalledWith(
+        "storage_error",
+        "storage offline",
+        {},
+      );
+    },
+  );
 });
 
-describe("JarvisEngine", () => {
-  const temporaryDirectories: string[] = [];
-
-  afterEach(async () => {
-    await Promise.all(
-      temporaryDirectories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
-    );
-  });
-
-  test("uses the OpenCode state path for the system transform", async () => {
-    const stateRoot = await mkdtemp(join(tmpdir(), "opencode-jarvis-engine-"));
-    temporaryDirectories.push(stateRoot);
-    await new SessionStateStore(stateRoot).setEnabled("session-a", true);
-    const getPath = vi.fn().mockResolvedValue({ data: { state: stateRoot } });
-    const hooks = await JarvisEngine({
-      client: { path: { get: getPath } },
-    } as unknown as PluginInput);
-    const output = { system: ["existing"] };
-
-    await hooks["experimental.chat.system.transform"]?.(
-      { sessionID: "session-a" } as Parameters<
-        NonNullable<typeof hooks["experimental.chat.system.transform"]>
-      >[0],
-      output,
-    );
-
-    expect(getPath).toHaveBeenCalledOnce();
-    expect(output.system).toEqual(["existing", JARVIS_SYSTEM_INSTRUCTION]);
-  });
-
-  test("does not inject the instruction when OpenCode provides no state path", async () => {
-    const getPath = vi.fn().mockResolvedValue({ data: undefined });
-    const hooks = await JarvisEngine({
-      client: { path: { get: getPath } },
-    } as unknown as PluginInput);
-    const output = { system: ["existing"] };
-
-    await hooks["experimental.chat.system.transform"]?.(
-      { sessionID: "session-a" } as Parameters<
-        NonNullable<typeof hooks["experimental.chat.system.transform"]>
-      >[0],
-      output,
-    );
-
-    expect(output.system).toEqual(["existing"]);
-  });
-
-  test("does not call client.path.get() while OpenCode is still loading the plugin", async () => {
-    // OpenCode blocks its own bootstrap on this promise resolving, with no
-    // timeout. In single-process mode, client.path.get() routes back into
-    // that same in-flight bootstrap and deadlocks forever if called here.
-    const getPath = vi.fn().mockResolvedValue({ data: { state: "/tmp/unused" } });
-
-    await JarvisEngine({
-      client: { path: { get: getPath } },
-    } as unknown as PluginInput);
-
-    expect(getPath).not.toHaveBeenCalled();
+describe("server plugin entrypoint", () => {
+  test("exports the native OpenCode 2 plugin definition", () => {
+    expect(plugin).toMatchObject({
+      id: "opencode-jarvis",
+      setup: setupJarvisServer,
+    });
   });
 });

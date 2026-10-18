@@ -1,189 +1,93 @@
-import {
-  mkdir,
-  lstat,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  symlink,
-  utimes,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
-import { SessionStateStore } from "../src/state.js";
+import { SessionStateStore, type JarvisStorage } from "../src/state.js";
 
-describe("SessionStateStore", () => {
-  const temporaryDirectories: string[] = [];
+class MemoryStorage implements JarvisStorage {
+  readonly values = new Map<string, unknown>();
 
-  async function createStateRoot(): Promise<string> {
-    const directory = await mkdtemp(join(tmpdir(), "opencode-jarvis-state-"));
-    temporaryDirectories.push(directory);
-    return directory;
+  async get(key: string): Promise<unknown> {
+    return this.values.get(key);
   }
 
-  afterEach(async () => {
-    await Promise.all(
-      temporaryDirectories.splice(0).map((directory) =>
-        rm(directory, { recursive: true, force: true }),
-      ),
-    );
+  async set(key: string, value: boolean): Promise<void> {
+    this.values.set(key, value);
+  }
+
+  async remove(key: string): Promise<void> {
+    this.values.delete(key);
+  }
+}
+
+describe("SessionStateStore", () => {
+  test("defaults a missing session state to disabled", async () => {
+    const state = new SessionStateStore(new MemoryStorage());
+
+    await expect(state.isEnabled("session-a")).resolves.toBe(false);
   });
 
-  test("defaults a missing session state to off", async () => {
-    const store = new SessionStateStore(await createStateRoot());
+  test("persists enabled and removes disabled state", async () => {
+    const storage = new MemoryStorage();
+    const set = vi.spyOn(storage, "set");
+    const remove = vi.spyOn(storage, "remove");
+    const state = new SessionStateStore(storage);
 
-    await expect(store.isEnabled("session-a")).resolves.toBe(false);
+    await expect(state.setEnabled("session-a", true)).resolves.toBe(true);
+    expect(set).toHaveBeenCalledWith("session/session-a/enabled", true);
+    await expect(state.isEnabled("session-a")).resolves.toBe(true);
+
+    await expect(state.setEnabled("session-a", false)).resolves.toBe(false);
+    expect(remove).toHaveBeenCalledWith("session/session-a/enabled");
+    await expect(state.isEnabled("session-a")).resolves.toBe(false);
   });
 
-  test("toggles only the selected session", async () => {
-    const store = new SessionStateStore(await createStateRoot());
+  test("toggles a session on and then off", async () => {
+    const state = new SessionStateStore(new MemoryStorage());
 
-    await expect(store.toggle("session-a")).resolves.toBe(true);
-    await expect(store.isEnabled("session-a")).resolves.toBe(true);
-    await expect(store.isEnabled("session-b")).resolves.toBe(false);
-    await expect(store.toggle("session-a")).resolves.toBe(false);
-    await expect(store.isEnabled("session-a")).resolves.toBe(false);
+    await expect(state.toggle("session-a")).resolves.toBe(true);
+    await expect(state.toggle("session-a")).resolves.toBe(false);
+    await expect(state.isEnabled("session-a")).resolves.toBe(false);
   });
 
-  test("fails closed when state JSON is corrupt", async () => {
-    const stateRoot = await createStateRoot();
-    const stateDirectory = join(stateRoot, "opencode-jarvis");
-    await mkdir(stateDirectory, { recursive: true });
-    await writeFile(join(stateDirectory, "state.json"), "{not-json", "utf8");
+  test("isolates state by session ID", async () => {
+    const state = new SessionStateStore(new MemoryStorage());
 
-    const store = new SessionStateStore(stateRoot);
+    await state.setEnabled("session-a", true);
 
-    await expect(store.isEnabled("session-a")).resolves.toBe(false);
+    await expect(state.isEnabled("session-a")).resolves.toBe(true);
+    await expect(state.isEnabled("session-b")).resolves.toBe(false);
   });
 
-  test.each([
-    [
-      "setEnabled",
-      (store: SessionStateStore) => store.setEnabled("session-a", true),
-    ],
-    ["toggle", (store: SessionStateStore) => store.toggle("session-a")],
-  ])(
-    "%s rejects operational read errors while reads fail closed",
-    async (_method, mutate) => {
-      const stateRoot = await createStateRoot();
-      const stateDirectory = join(stateRoot, "opencode-jarvis");
-      const invalidTarget = join(stateRoot, "invalid-state-target");
-      const stateFile = join(stateDirectory, "state.json");
-      await mkdir(stateDirectory, { recursive: true });
-      await mkdir(invalidTarget);
-      await symlink(invalidTarget, stateFile, "dir");
-      const store = new SessionStateStore(stateRoot);
+  test.each([false, 1, "true", null, {}, []])(
+    "fails closed for malformed stored value %j",
+    async (value) => {
+      const storage = new MemoryStorage();
+      storage.values.set("session/session-a/enabled", value);
+      const state = new SessionStateStore(storage);
 
-      await expect(store.isEnabled("session-a")).resolves.toBe(false);
-      await expect(mutate(store)).rejects.toMatchObject({ code: "EISDIR" });
-      expect((await lstat(stateFile)).isSymbolicLink()).toBe(true);
+      await expect(state.isEnabled("session-a")).resolves.toBe(false);
     },
   );
 
-  test("serializes rapid mutations and readers wait for pending writes", async () => {
-    const stateRoot = await createStateRoot();
-    const store = new SessionStateStore(stateRoot);
+  test("serializes concurrent toggles for one session", async () => {
+    const state = new SessionStateStore(new MemoryStorage());
 
-    const writes = [
-      store.setEnabled("session-a", true),
-      store.setEnabled("session-b", true),
-      store.setEnabled("session-c", true),
-    ];
-
-    await expect(store.isEnabled("session-c")).resolves.toBe(true);
-    await expect(Promise.all(writes)).resolves.toEqual([true, true, true]);
-
-    const stateFile = join(stateRoot, "opencode-jarvis", "state.json");
-    await expect(readFile(stateFile, "utf8")).resolves.toBe(
-      JSON.stringify({
-        sessions: {
-          "session-a": true,
-          "session-b": true,
-          "session-c": true,
-        },
-      }),
-    );
-    expect((await stat(stateFile)).mode & 0o777).toBe(0o600);
-    await expect(readdir(join(stateRoot, "opencode-jarvis"))).resolves.toEqual([
-      "state.json",
-    ]);
-  });
-
-  test("serializes mutations across store instances", async () => {
-    const stateRoot = await createStateRoot();
-    const firstStore = new SessionStateStore(stateRoot);
-    const secondStore = new SessionStateStore(stateRoot);
-
-    await Promise.all([
-      firstStore.setEnabled("session-a", true),
-      secondStore.setEnabled("session-b", true),
+    const results = await Promise.all([
+      state.toggle("session-a"),
+      state.toggle("session-a"),
     ]);
 
-    const reader = new SessionStateStore(stateRoot);
-    await expect(
-      Promise.all([
-        reader.isEnabled("session-a"),
-        reader.isEnabled("session-b"),
-      ]),
-    ).resolves.toEqual([true, true]);
+    expect(results).toEqual([true, false]);
+    expect(await state.isEnabled("session-a")).toBe(false);
   });
 
-  test("gives up after a bounded wait when the mutation lock stays active", async () => {
-    const stateRoot = await createStateRoot();
-    const stateDirectory = join(stateRoot, "opencode-jarvis");
-    await mkdir(stateDirectory, { recursive: true });
-    await writeFile(join(stateDirectory, "state.lock"), "active", "utf8");
-    const store = new SessionStateStore(stateRoot);
+  test("does not let a rejected mutation poison later mutations", async () => {
+    const storage = new MemoryStorage();
+    const failure = new Error("storage unavailable");
+    vi.spyOn(storage, "set").mockRejectedValueOnce(failure);
+    const state = new SessionStateStore(storage);
 
-    await expect(store.setEnabled("session-a", true)).rejects.toThrow(
-      "Timed out waiting for state lock",
-    );
-  });
-
-  test("recovers a stale mutation lock", async () => {
-    const stateRoot = await createStateRoot();
-    const stateDirectory = join(stateRoot, "opencode-jarvis");
-    const lockFile = join(stateDirectory, "state.lock");
-    await mkdir(stateDirectory, { recursive: true });
-    await writeFile(lockFile, "abandoned", "utf8");
-    const staleTime = new Date(Date.now() - 60_000);
-    await utimes(lockFile, staleTime, staleTime);
-    const store = new SessionStateStore(stateRoot);
-
-    await expect(store.setEnabled("session-a", true)).resolves.toBe(true);
-    await expect(stat(lockFile)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  test("preserves only session entries whose value is exactly true", async () => {
-    const stateRoot = await createStateRoot();
-    const stateDirectory = join(stateRoot, "opencode-jarvis");
-    await mkdir(stateDirectory, { recursive: true });
-    await writeFile(
-      join(stateDirectory, "state.json"),
-      JSON.stringify({
-        sessions: {
-          enabled: true,
-          disabled: false,
-          truthy: 1,
-        },
-      }),
-      "utf8",
-    );
-    const store = new SessionStateStore(stateRoot);
-
-    await expect(store.setEnabled("new-session", true)).resolves.toBe(true);
-
-    await expect(
-      readFile(join(stateDirectory, "state.json"), "utf8").then(JSON.parse),
-    ).resolves.toEqual({
-      sessions: {
-        enabled: true,
-        "new-session": true,
-      },
-    });
+    await expect(state.setEnabled("session-a", true)).rejects.toBe(failure);
+    await expect(state.setEnabled("session-a", true)).resolves.toBe(true);
+    await expect(state.isEnabled("session-a")).resolves.toBe(true);
   });
 });

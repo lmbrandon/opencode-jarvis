@@ -1,44 +1,68 @@
-import type { Hooks, Plugin } from "@opencode-ai/plugin";
+import type { Plugin } from "@opencode/plugin";
 
 import { JARVIS_SYSTEM_INSTRUCTION } from "./prompt.js";
+import { JarvisRpc } from "./rpc.js";
 import { SessionStateStore } from "./state.js";
 
-type StateReader = Pick<SessionStateStore, "isEnabled">;
-type SystemInput = { sessionID?: string };
-type SystemOutput = { system?: string[] };
-
-export function createSystemTransform(state: StateReader) {
-  return async (input: SystemInput, output: SystemOutput): Promise<void> => {
-    if (!input.sessionID) return;
-    if (!(await state.isEnabled(input.sessionID))) return;
-    (output.system ??= []).push(JARVIS_SYSTEM_INSTRUCTION);
-  };
+interface SessionInput {
+  sessionID: string;
 }
 
-export const JarvisEngine: Plugin = async ({ client }) => {
-  // client.path.get() must not be called here: OpenCode blocks its own
-  // bootstrap on this function's returned promise, with no timeout. In
-  // single-process mode, the RPC routes back into that same in-flight
-  // bootstrap and deadlocks forever. Resolve it lazily instead, on first
-  // actual hook invocation, by which point bootstrap has already finished.
-  let statePromise: Promise<SessionStateStore | undefined> | undefined;
-  const resolveState = (): Promise<SessionStateStore | undefined> => {
-    if (!statePromise) {
-      statePromise = client.path.get().then((paths) => {
-        const stateRoot = paths.data?.state;
-        return stateRoot ? new SessionStateStore(stateRoot) : undefined;
-      });
-    }
-    return statePromise;
-  };
-  const state: StateReader = {
-    isEnabled: async (sessionID) => {
-      const store = await resolveState();
-      return store ? store.isEnabled(sessionID) : false;
-    },
-  };
+interface SetInput extends SessionInput {
+  enabled: boolean;
+}
 
-  return {
-    "experimental.chat.system.transform": createSystemTransform(state),
-  } satisfies Hooks;
-};
+function storageErrorMessage(error: unknown): string {
+  return error instanceof Error && error.message
+    ? error.message
+    : "Jarvis storage operation failed";
+}
+
+async function mapStorageError<T, E>(
+  operation: () => Promise<T>,
+  error: (message: string) => E,
+): Promise<T | E> {
+  try {
+    return await operation();
+  } catch (cause) {
+    return error(storageErrorMessage(cause));
+  }
+}
+
+export async function setupJarvisServer(ctx: Plugin.Context): Promise<void> {
+  const state = new SessionStateStore(ctx.storage);
+
+  await ctx.rpc.register(JarvisRpc, {
+    status: async (input, context) => {
+      const { sessionID } = input as SessionInput;
+      return mapStorageError(
+        async () => ({ enabled: await state.isEnabled(sessionID) }),
+        (message) => context.error("storage_error", message, {}),
+      );
+    },
+    set: async (input, context) => {
+      const { sessionID, enabled } = input as SetInput;
+      return mapStorageError(
+        async () => ({ enabled: await state.setEnabled(sessionID, enabled) }),
+        (message) => context.error("storage_error", message, {}),
+      );
+    },
+    toggle: async (input, context) => {
+      const { sessionID } = input as SessionInput;
+      return mapStorageError(
+        async () => ({ enabled: await state.toggle(sessionID) }),
+        (message) => context.error("storage_error", message, {}),
+      );
+    },
+  });
+
+  await ctx.session.hook("context", async (event) => {
+    try {
+      if (await state.isEnabled(event.sessionID)) {
+        event.system.push({ type: "text", text: JARVIS_SYSTEM_INSTRUCTION });
+      }
+    } catch {
+      // Fail closed: prompt construction must continue without Jarvis.
+    }
+  });
+}

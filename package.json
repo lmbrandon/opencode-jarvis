@@ -12,16 +12,16 @@
   "type": "module",
   "license": "MIT",
   "engines": {
-    "opencode": ">=1.18.22"
+    "opencode": ">=2.0.0 <3"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./server": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+    "./rpc": {
+      "types": "./dist/rpc.d.ts",
+      "import": "./dist/rpc.js"
     },
     "./tui": {
       "types": "./dist/tui.d.ts",
@@ -34,22 +34,31 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/tui.ts --format esm --dts --clean --out-dir dist",
+    "build": "tsup src/index.ts src/rpc.ts src/tui.ts --format esm --dts --clean --out-dir dist",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "check": "npm run typecheck && npm test && npm run build"
+    "test": "vitest run --exclude tests/package-artifacts.test.ts",
+    "smoke:v2": "node testing/smoke-v2.mjs",
+    "test:package": "npm run build && vitest run tests/package.test.ts tests/package-artifacts.test.ts && npm pack --dry-run --json",
+    "check": "npm run typecheck && npm test && npm run test:package"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.22",
-    "@opencode-ai/sdk": "1.18.22"
+    "@opencode/plugin": "2.0.29"
   },
   "devDependencies": {
-    "@opentui/core": "0.4.5",
-    "@opentui/keymap": "0.4.5",
-    "@opentui/solid": "0.4.5",
+    "@opencode/theme": "^2.0.29",
+    "@opentui/core": "^0.5.17",
+    "@opentui/solid": "^0.5.17",
+    "@types/json-schema": "^7.0.15",
     "@types/node": "^24.0.0",
+    "solid-js": "^1.9.12",
     "tsup": "^8.5.0",
     "typescript": "^5.8.2",
     "vitest": "^3.2.4"
-  }
+  },
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "author": ""
 }

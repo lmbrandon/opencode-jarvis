@@ -1,8 +1,8 @@
-import type { PluginModule } from "@opencode-ai/plugin";
+import { Plugin } from "@opencode/plugin";
 
-import { JarvisEngine } from "./engine.js";
+import { setupJarvisServer } from "./engine.js";
 
-export default {
+export default Plugin.define({
   id: "opencode-jarvis",
-  server: JarvisEngine,
-} satisfies PluginModule;
+  setup: setupJarvisServer,
+});

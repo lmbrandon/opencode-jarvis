@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 
 type PackageJson = {
   exports: Record<string, { types: string; import: string }>;
+  engines: { opencode: string };
+  dependencies: Record<string, string>;
+  scripts: Record<string, string>;
 };
 
 async function packageJson(): Promise<PackageJson> {
@@ -13,8 +16,8 @@ async function packageJson(): Promise<PackageJson> {
   ) as PackageJson;
 }
 
-describe("package entrypoints", () => {
-  it("exposes direct, server, and TUI modules", async () => {
+describe("package manifest", () => {
+  it("exposes direct, RPC, and TUI modules", async () => {
     const manifest = await packageJson();
 
     expect(manifest.exports).toEqual({
@@ -22,9 +25,9 @@ describe("package entrypoints", () => {
         types: "./dist/index.d.ts",
         import: "./dist/index.js",
       },
-      "./server": {
-        types: "./dist/index.d.ts",
-        import: "./dist/index.js",
+      "./rpc": {
+        types: "./dist/rpc.d.ts",
+        import: "./dist/rpc.js",
       },
       "./tui": {
         types: "./dist/tui.d.ts",
@@ -33,40 +36,33 @@ describe("package entrypoints", () => {
     });
   });
 
-  it("maps every export to an existing build artifact once dist/ exists", async () => {
-    const distDir = fileURLToPath(new URL("../dist", import.meta.url));
-
-    // `npm run check` runs `tsc --noEmit && npm test && npm run build`, so on
-    // a clean checkout with no prior build, dist/ does not exist yet when
-    // this test runs. Skip the existence assertion in that case; it still
-    // runs for real whenever dist/ is already present (a prior local build,
-    // or a CI order that builds before testing).
-    if (!existsSync(distDir)) {
-      return;
-    }
-
+  it("requires OpenCode 2", async () => {
     const manifest = await packageJson();
-    const artifactPaths = new Set(
-      Object.values(manifest.exports).flatMap((target) => [
-        target.types,
-        target.import,
-      ]),
-    );
 
-    for (const relativePath of artifactPaths) {
-      const absolutePath = fileURLToPath(
-        new URL(`../${relativePath}`, import.meta.url),
-      );
-      expect(existsSync(absolutePath), `expected ${relativePath} to exist`).toBe(
-        true,
-      );
-    }
+    expect(manifest.engines.opencode).toBe(">=2.0.0 <3");
+  });
+
+  it("depends only on the OpenCode 2 plugin package", async () => {
+    const manifest = await packageJson();
+
+    expect(manifest.dependencies).toEqual({ "@opencode/plugin": "2.0.29" });
+  });
+
+  it("provides the installed OpenCode 2 smoke test", async () => {
+    const manifest = await packageJson();
+
+    expect(manifest.scripts["smoke:v2"]).toBe("node testing/smoke-v2.mjs");
+    expect(
+      existsSync(
+        fileURLToPath(new URL("../testing/smoke-v2.mjs", import.meta.url)),
+      ),
+    ).toBe(true);
   });
 });
 
 type PluginConfig = {
   $schema?: string;
-  plugin?: unknown[];
+  plugins?: unknown[];
 };
 
 function jsonExamples(markdown: string): PluginConfig[] {
@@ -76,7 +72,7 @@ function jsonExamples(markdown: string): PluginConfig[] {
 }
 
 describe("installation documentation", () => {
-  it("documents separate server and TUI plugin configs for local installation", async () => {
+  it("documents one native v2 config for local installation", async () => {
     const readme = await readFile(
       new URL("../README.md", import.meta.url),
       "utf8",
@@ -86,15 +82,11 @@ describe("installation documentation", () => {
 
     expect(examples).toContainEqual({
       $schema: "https://opencode.ai/config.json",
-      plugin: expect.arrayContaining([localPackageSpec]),
-    });
-    expect(examples).toContainEqual({
-      $schema: "https://opencode.ai/tui.json",
-      plugin: expect.arrayContaining([localPackageSpec]),
+      plugins: expect.arrayContaining([localPackageSpec]),
     });
   });
 
-  it("documents separate server and TUI plugin configs for npm installation", async () => {
+  it("documents one native v2 config for npm installation", async () => {
     const readme = await readFile(
       new URL("../README.md", import.meta.url),
       "utf8",
@@ -104,11 +96,23 @@ describe("installation documentation", () => {
 
     expect(examples).toContainEqual({
       $schema: "https://opencode.ai/config.json",
-      plugin: expect.arrayContaining([npmPackageSpec]),
+      plugins: expect.arrayContaining([npmPackageSpec]),
     });
-    expect(examples).toContainEqual({
-      $schema: "https://opencode.ai/tui.json",
-      plugin: expect.arrayContaining([npmPackageSpec]),
-    });
+  });
+
+  it("contains no OpenCode 1 installation contract", async () => {
+    const readme = await readFile(
+      new URL("../README.md", import.meta.url),
+      "utf8",
+    );
+
+    expect(readme).toContain("OpenCode 2");
+    expect(readme).not.toMatch(/OpenCode 1\.18\.22|OpenCode 1 or newer/);
+    expect(readme).not.toContain("tui.json");
+    expect(readme).not.toContain("@opencode-ai/plugin");
+    expect(readme).not.toContain("@opencode-ai/sdk");
+    for (const example of jsonExamples(readme)) {
+      expect(example).not.toHaveProperty("plugin");
+    }
   });
 });

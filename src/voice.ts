@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
@@ -101,7 +100,7 @@ type StreamAudioPlayer = (
 ) => Promise<void>;
 
 export interface VoiceServiceOptions {
-  stateRoot: string;
+  cacheDirectory: string;
   getApiKey: () => string | undefined;
   fish?: FishSynthesizer;
   play?: AudioPlayer;
@@ -117,9 +116,7 @@ export class VoiceService {
   private readonly queue: VoiceQueue;
 
   constructor(options: VoiceServiceOptions) {
-    this.cache = new AudioCache(
-      join(options.stateRoot, "opencode-jarvis", "cache"),
-    );
+    this.cache = new AudioCache(options.cacheDirectory);
     this.fish = options.fish ?? new FishAudioClient();
     this.play = options.play ?? playWithFfplay;
     this.playStream = options.playStream ?? playStreamWithFfplay;
