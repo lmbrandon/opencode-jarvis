@@ -36,6 +36,7 @@
   "scripts": {
     "build": "tsup src/index.ts src/rpc.ts src/tui.ts --format esm --dts --clean --out-dir dist",
     "typecheck": "tsc --noEmit",
+    "audit:security": "npm audit --audit-level=high",
     "test": "vitest run --exclude tests/package-artifacts.test.ts",
     "smoke:v2": "node testing/smoke-v2.mjs",
     "test:package": "npm run build && vitest run tests/package.test.ts tests/package-artifacts.test.ts && npm pack --dry-run --json",
@@ -43,6 +44,9 @@
   },
   "dependencies": {
     "@opencode/plugin": "2.0.29"
+  },
+  "overrides": {
+    "seroval": "^1.6.11"
   },
   "devDependencies": {
     "@opencode/theme": "^2.0.29",
@@ -53,7 +57,7 @@
     "solid-js": "^1.9.12",
     "tsup": "^8.5.0",
     "typescript": "^5.8.2",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "main": "index.js",
   "directories": {

@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 
 import { Plugin } from "@opencode/plugin/tui";
 
+import { resolveFishApiKey } from "./api-key.js";
 import { resolveCacheDirectory } from "./cache-path.js";
 import {
   createJarvisController,
@@ -100,8 +101,7 @@ function enabledResult(value: unknown): boolean {
 
 export async function setupJarvisTui(context: Plugin.Context) {
   const rpc = context.client.rpc(JarvisRpc);
-  const environmentKey = process.env.FISH_API_KEY?.trim();
-  let apiKey = environmentKey || undefined;
+  let apiKey = await resolveFishApiKey(process.env, process.cwd());
   let disposed = false;
   let ownsKeyPrompt = false;
   const startupController = new AbortController();

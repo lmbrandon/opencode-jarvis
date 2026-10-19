@@ -44,7 +44,26 @@ This local-path form is for a same-machine server and terminal. When the termina
 
 ## Fish Audio key
 
-Set `FISH_API_KEY` in the terminal process environment when possible. If it is absent, the terminal plugin prompts at startup, validates the entered key, and retains a valid key in memory only for that process.
+Jarvis looks for your key at startup in this order:
+
+1. `FISH_API_KEY` in the terminal process environment.
+2. `FISH_API_KEY` in `.env` in the local folder where you launched OpenCode.
+3. The Fish Audio key dialog if neither source provides a nonblank key.
+
+For example, create a local `.env` containing:
+
+```dotenv
+FISH_API_KEY=your-fish-api-key
+```
+
+Keep that file out of Git. Jarvis reads only this key, does not load unrelated
+variables into the process environment, and does not execute shell expressions
+or search parent folders. With a remote server, `.env` is read on the terminal
+host, not the server. Missing or unreadable files fall back to the dialog.
+
+Keys from the environment or `.env` are used directly; keys pasted into the
+dialog are validated with Fish Audio first. Pasted keys stay in memory and are
+never saved back to `.env`. Restart or reload the plugin after editing `.env`.
 
 Fish Audio is a remote service. While Jarvis is enabled, complete assistant replies and reusable cue text, including skill names, are sent to Fish Audio for speech synthesis. Fish Audio's privacy and retention terms apply. The API key is sent only to Fish Audio for validation and synthesis; it is not stored in server plugin state or the audio cache.
 
@@ -81,6 +100,17 @@ Assistant replies stream directly to playback and are not written to disk. Reusa
 - `~/.cache/opencode-jarvis` on other platforms otherwise.
 
 ## Development and verification
+
+### Dependency security
+
+Use `npm ci` to install the reviewed lockfile, and run `npm run audit:security`
+to fail on high or critical dependency advisories. The OpenTUI integration pins
+Solid, so this repository overrides its transitive Seroval dependency to the
+patched `^1.6.11` release line. Vitest is on the patched 4.1 release line.
+
+Keep Fish credentials in the environment, never in committed configuration.
+`.env` variants and `.npmrc` are ignored; `.env.example` may be committed only
+with placeholders.
 
 Run the complete source, build, test, and package checks:
 

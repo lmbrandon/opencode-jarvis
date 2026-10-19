@@ -8,6 +8,9 @@ graphify-out/
 
 # Secrets
 .env
+.env.*
+!.env.example
+.npmrc
 
 # Generated / temporary audio
 *.mp3

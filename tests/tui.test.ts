@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -30,10 +33,12 @@ vi.mock("../src/controller.js", async (importOriginal) => {
   };
 });
 vi.mock("../src/voice.js", () => ({
-  VoiceService: mocks.voiceConstructor.mockReturnValue(mocks.voice),
+  VoiceService: mocks.voiceConstructor.mockImplementation(function () {
+    return mocks.voice;
+  }),
 }));
 vi.mock("../src/fish.js", () => ({
-  FishAudioClient: vi.fn(() => mocks.fish),
+  FishAudioClient: vi.fn(function () { return mocks.fish; }),
 }));
 
 import plugin, { setupJarvisTui } from "../src/tui.js";
@@ -117,7 +122,7 @@ describe("OpenCode 2 TUI plugin", () => {
     else process.env.FISH_API_KEY = originalKey;
     vi.clearAllMocks();
     mocks.createController.mockReturnValue(mocks.controller);
-    mocks.voiceConstructor.mockReturnValue(mocks.voice);
+    mocks.voiceConstructor.mockImplementation(function () { return mocks.voice; });
     mocks.fish.validateKey.mockResolvedValue(true);
   });
 
@@ -300,6 +305,25 @@ describe("OpenCode 2 TUI plugin", () => {
     )).toBe(true);
     expect(mocks.voice.dispose).toHaveBeenCalledOnce();
     expect(mocks.controller.replyCompleted).not.toHaveBeenCalled();
+  });
+
+  it("uses the launch folder .env key without opening a dialog", async () => {
+    delete process.env.FISH_API_KEY;
+    const directory = await mkdtemp(join(tmpdir(), "jarvis-tui-key-"));
+    await writeFile(join(directory, ".env"), "FISH_API_KEY=file-placeholder");
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(directory);
+    const host = createContext();
+    try {
+      const cleanup = await setupJarvisTui(host.context as never);
+      const options = mocks.voiceConstructor.mock.calls[0]![0];
+      expect(options.getApiKey()).toBe("file-placeholder");
+      expect(host.prompt).not.toHaveBeenCalled();
+      expect(process.env.FISH_API_KEY).toBeUndefined();
+      await cleanup?.();
+    } finally {
+      cwd.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("clears an owned key prompt and awaits startup during cleanup", async () => {

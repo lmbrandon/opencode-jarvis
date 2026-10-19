@@ -3,7 +3,8 @@ import { access, mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { PassThrough } from "node:stream"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest"
+import type { FishAudioClient } from "../src/fish.js"
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }))
 vi.mock("node:child_process", () => ({ spawn: spawnMock }))
@@ -606,7 +607,7 @@ function fakeChildProcess(): EventEmitter & { kill: ReturnType<typeof vi.fn>; st
   return child
 }
 
-function defaultPlayerVoice(root: string, report: ReturnType<typeof vi.fn>): VoiceService {
+function defaultPlayerVoice(root: string, report: Mock<(error: unknown) => void>): VoiceService {
   return new VoiceService({
     cacheDirectory: root,
     getApiKey: () => "secret",
@@ -625,11 +626,11 @@ function fakeAudioStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
 }
 
 function fakeFish(overrides: {
-  synthesize?: ReturnType<typeof vi.fn>
-  synthesizeStream?: ReturnType<typeof vi.fn>
-} = {}): { synthesize: ReturnType<typeof vi.fn>; synthesizeStream: ReturnType<typeof vi.fn> } {
+  synthesize?: Mock<FishAudioClient["synthesize"]>
+  synthesizeStream?: Mock<FishAudioClient["synthesizeStream"]>
+} = {}) {
   return {
-    synthesize: overrides.synthesize ?? vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+    synthesize: overrides.synthesize ?? vi.fn<FishAudioClient["synthesize"]>().mockResolvedValue(new Uint8Array([1, 2, 3])),
     synthesizeStream:
       overrides.synthesizeStream ??
       // A fresh stream per call: a ReadableStream can only be read once, and
