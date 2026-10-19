@@ -18,6 +18,26 @@ async function packageJson(): Promise<PackageJson> {
 }
 
 describe("package manifest", () => {
+  it("does not trigger npm Git dependency preparation in bundled OpenCode", async () => {
+    const manifest = await packageJson();
+    // Pacote prepares Git packages with any of these scripts, even with
+    // ignoreScripts enabled. OpenCode 2.0.32 cannot run that nested npm CLI.
+    const preparationScripts = [
+      "preinstall",
+      "install",
+      "postinstall",
+      "build",
+      "prepack",
+      "prepare",
+    ];
+
+    expect(
+      preparationScripts.filter((name) => manifest.scripts[name]),
+      "Git installs must use committed dist/ without spawning npm preparation",
+    ).toEqual([]);
+    expect(manifest).not.toHaveProperty("workspaces");
+  });
+
   it("allows built exports into Git for installs with scripts disabled", async () => {
     const manifest = await packageJson();
     for (const target of Object.values(manifest.exports)) {

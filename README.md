@@ -131,7 +131,7 @@ For contributors who want to run a checkout instead of the GitHub version:
 git clone https://github.com/lmbrandon/opencode-jarvis.git
 cd opencode-jarvis
 npm ci
-npm run build
+npm run build:dist
 ```
 
 Then add your checkout's absolute `file://` URI to `opencode.json`:
@@ -149,6 +149,12 @@ same-machine server and terminal; they are not shared with a remote host.
 The built `dist/` files are committed because OpenCode installs Git packages with
 build scripts disabled. After changing source, run `npm run check` and include
 the rebuilt `dist/` files in the same commit. Node.js and npm are needed for development.
+
+Use `build:dist`, not a script named `build`. npm prepares Git dependencies that
+declare `build`, `prepare`, `prepack`, `preinstall`, `install`, `postinstall`, or
+workspaces even when lifecycle scripts are disabled. That preparation fails in
+the bundled OpenCode 2.0.32 installer before Jarvis loads. Keeping those triggers
+out of the manifest lets GitHub installs use the committed artifacts directly.
 
 ### Dependency security
 

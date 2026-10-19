@@ -34,12 +34,12 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/rpc.ts src/tui.ts --format esm --dts --clean --out-dir dist",
+    "build:dist": "tsup src/index.ts src/rpc.ts src/tui.ts --format esm --dts --clean --out-dir dist",
     "typecheck": "tsc --noEmit",
     "audit:security": "npm audit --audit-level=high",
     "test": "vitest run --exclude tests/package-artifacts.test.ts",
     "smoke:v2": "node testing/smoke-v2.mjs",
-    "test:package": "npm run build && vitest run tests/package.test.ts tests/package-artifacts.test.ts && npm pack --dry-run --json",
+    "test:package": "npm run build:dist && vitest run tests/package.test.ts tests/package-artifacts.test.ts && npm pack --dry-run --json",
     "check": "npm run typecheck && npm test && npm run test:package"
   },
   "dependencies": {
