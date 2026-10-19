@@ -26,5 +26,6 @@ opencode.json
 .claude/worktrees/
 
 # Local working notes and manual test scratch
+HANDOFF.md
 testing/*
 !testing/smoke-v2.mjs
