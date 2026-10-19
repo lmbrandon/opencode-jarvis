@@ -1,46 +1,72 @@
 # opencode-jarvis
 
-Session-specific Jarvis mode for OpenCode 2 with Fish Audio speech.
+**Hear your OpenCode replies with a Jarvis-style voice companion.**
+
+Jarvis adds spoken replies and skill announcements to the OpenCode 2 terminal.
+Turn it on for one session and keep your other sessions quiet.
+
+- **Listen to completed replies.** Fish Audio reads the response after code and Markdown formatting are removed.
+- **Hear skills activate.** Spoken cues announce which skill OpenCode is using.
+- **Stay in control.** Enable or mute Jarvis with a slash command. Your choice is saved per session.
+
+Typed input, spoken output. Jarvis does not use your microphone or accept voice commands.
 
 ## Requirements
 
-- OpenCode 2
-- `ffplay` available on the terminal host's `PATH`
-- A Fish Audio API key
-- Node.js and npm for source development
+- [OpenCode 2](https://opencode.ai/v2/docs/)
+- `ffplay` from [FFmpeg](https://ffmpeg.org/download.html), available on the terminal host's `PATH`
+- A [Fish Audio](https://fish.audio/?fpr=awzeir) API key and network access to Fish Audio
 
-## Install from npm
+## Quick start
 
-Add the published package to the `plugins` array in `opencode.json` without removing unrelated plugins:
+### 1. Install from GitHub
+
+Add the Git URL to the `plugins` array in **your project's `opencode.json`**.
+Keep any plugins you already use, including Superpowers:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["opencode-jarvis"]
+  "plugins": ["git+https://github.com/lmbrandon/opencode-jarvis.git"]
 }
 ```
 
-The package root provides the server plugin, and its `./tui` export is discovered automatically for commands and speech. Restart OpenCode after changing the configuration.
+OpenCode installs Jarvis from [this repository](https://github.com/lmbrandon/opencode-jarvis),
+using the same Git-based plugin mechanism as Superpowers. Superpowers is optional.
+You do not need to clone this repo, supply a local path, or run a build.
 
-## Local development installation
-
-Install dependencies and build the package:
+For all your projects, add the same entry to `~/.config/opencode/opencode.json`
+(or `$XDG_CONFIG_HOME/opencode/opencode.json`) instead. You can also install globally with:
 
 ```sh
-npm install
-npm run build
+opencode plugin add git+https://github.com/lmbrandon/opencode-jarvis.git
 ```
 
-Then add the checkout's absolute `file://` URI to `opencode.json`:
+Restart OpenCode after installation. Jarvis includes both the server plugin and
+the terminal plugin; you do not need a separate TUI entry.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugins": ["file:///absolute/path/to/opencode-jarvis"]
-}
+### 2. Add your Fish Audio key
+
+Sign up for [Fish Audio through our affiliate link](https://fish.audio/?fpr=awzeir),
+then create an API key in your Fish Audio account. We may earn a commission if
+you purchase through this link.
+
+Create a `.env` in the folder where you launch OpenCode:
+
+```dotenv
+FISH_API_KEY=your-fish-api-key
 ```
 
-This local-path form is for a same-machine server and terminal. When the terminal connects to a remote OpenCode server, use the published package name and make the package available on both hosts; an absolute path from one host is not shared with the other.
+Keep `.env` out of Git. You can also set `FISH_API_KEY` in your terminal environment
+or paste it into the Fish Audio dialog when Jarvis starts. See [key handling](#fish-audio-key) below.
+
+### 3. Turn Jarvis on
+
+Run `/jarvis-on` in an OpenCode session, then send a prompt. Jarvis greets you
+and speaks the completed reply. Run `/jarvis-off` to stop speech for that session.
+
+New sessions start with Jarvis off. Fish Audio is a separate service; its usage
+limits and pricing apply.
 
 ## Fish Audio key
 
@@ -49,12 +75,6 @@ Jarvis looks for your key at startup in this order:
 1. `FISH_API_KEY` in the terminal process environment.
 2. `FISH_API_KEY` in `.env` in the local folder where you launched OpenCode.
 3. The Fish Audio key dialog if neither source provides a nonblank key.
-
-For example, create a local `.env` containing:
-
-```dotenv
-FISH_API_KEY=your-fish-api-key
-```
 
 Keep that file out of Git. Jarvis reads only this key, does not load unrelated
 variables into the process environment, and does not execute shell expressions
@@ -78,7 +98,9 @@ The commands run locally through the terminal plugin and do not cause a model re
 
 ## Behavior
 
-New sessions default to off. OpenCode 2 stores mode per session through server plugin storage, so the state works with remote terminal connections and persists when a session is reopened. State from an earlier OpenCode installation is intentionally not migrated: after upgrading, existing sessions start disabled once and then persist subsequent OpenCode 2 changes normally.
+OpenCode 2 stores Jarvis mode per session, so your choice persists when you reopen
+a session and works with remote terminal connections. Audio plays on the terminal
+host. When upgrading from the older plugin, existing sessions start disabled once.
 
 While enabled, Jarvis:
 
@@ -100,6 +122,33 @@ Assistant replies stream directly to playback and are not written to disk. Reusa
 - `~/.cache/opencode-jarvis` on other platforms otherwise.
 
 ## Development and verification
+
+### Local development installation
+
+For contributors who want to run a checkout instead of the GitHub version:
+
+```sh
+git clone https://github.com/lmbrandon/opencode-jarvis.git
+cd opencode-jarvis
+npm ci
+npm run build
+```
+
+Then add your checkout's absolute `file://` URI to `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": ["file:///absolute/path/to/opencode-jarvis"]
+}
+```
+
+Use only one Jarvis entry: the Git URL or the local path. Local paths are for a
+same-machine server and terminal; they are not shared with a remote host.
+
+The built `dist/` files are committed because OpenCode installs Git packages with
+build scripts disabled. After changing source, run `npm run check` and include
+the rebuilt `dist/` files in the same commit. Node.js and npm are needed for development.
 
 ### Dependency security
 
@@ -137,4 +186,11 @@ npm run smoke:v2 -- ./opencode-jarvis-0.1.0.tgz
 
 ## Uninstall
 
-Remove only the exact `opencode-jarvis` or local `file://` entry from the `plugins` array in `opencode.json`, preserving unrelated entries, and restart OpenCode. OpenCode owns the server-side plugin storage. To remove cached cue audio, delete only the terminal host's `opencode-jarvis` cache directory listed above.
+Remove only the Jarvis Git URL (or your development `file://` entry) from the
+`plugins` array in the config where you added it. Preserve unrelated plugins and
+restart OpenCode. OpenCode owns the server-side plugin storage. To remove cached
+cue audio, delete only the terminal host's `opencode-jarvis` cache directory listed above.
+
+## License
+
+[MIT](LICENSE)

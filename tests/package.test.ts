@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -17,6 +18,17 @@ async function packageJson(): Promise<PackageJson> {
 }
 
 describe("package manifest", () => {
+  it("allows built exports into Git for installs with scripts disabled", async () => {
+    const manifest = await packageJson();
+    for (const target of Object.values(manifest.exports)) {
+      for (const path of [target.import, target.types]) {
+        const result = spawnSync("git", ["check-ignore", "--no-index", path], {
+          cwd: fileURLToPath(new URL("..", import.meta.url)),
+        });
+        expect(result.status, `${path} must not be ignored`).toBe(1);
+      }
+    }
+  });
   it("exposes direct, RPC, and TUI modules", async () => {
     const manifest = await packageJson();
 
@@ -86,17 +98,17 @@ describe("installation documentation", () => {
     });
   });
 
-  it("documents one native v2 config for npm installation", async () => {
+  it("documents native v2 installation directly from the GitHub repository", async () => {
     const readme = await readFile(
       new URL("../README.md", import.meta.url),
       "utf8",
     );
     const examples = jsonExamples(readme);
-    const npmPackageSpec = "opencode-jarvis";
+    const gitPackageSpec = "git+https://github.com/lmbrandon/opencode-jarvis.git";
 
     expect(examples).toContainEqual({
       $schema: "https://opencode.ai/config.json",
-      plugins: expect.arrayContaining([npmPackageSpec]),
+      plugins: expect.arrayContaining([gitPackageSpec]),
     });
   });
 
@@ -111,6 +123,7 @@ describe("installation documentation", () => {
     expect(readme).not.toContain("tui.json");
     expect(readme).not.toContain("@opencode-ai/plugin");
     expect(readme).not.toContain("@opencode-ai/sdk");
+    expect(readme).not.toContain("/home/lmbrandon/");
     for (const example of jsonExamples(readme)) {
       expect(example).not.toHaveProperty("plugin");
     }

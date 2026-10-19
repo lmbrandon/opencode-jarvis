@@ -1,0 +1,122 @@
+import {
+  JarvisRpc
+} from "./chunk-LOXVGK3I.js";
+
+// src/index.ts
+import { Plugin } from "@opencode/plugin";
+
+// src/prompt.ts
+var JARVIS_SYSTEM_INSTRUCTION = `Jarvis mode is enabled. Be concise, composed, and helpful, with responses that sound natural when spoken aloud. Preserve all existing OpenCode permission and tool behavior: keep writing code, creating files, and running commands exactly as you normally would.
+
+Put runnable commands in a code block rather than typing them out in plain prose, and when you tell the user what a command does out loud, describe it in natural spoken language (for example, "first install Django, then start the project") instead of narrating a literal command line chained together with &&.
+
+You may sprinkle in Fish Audio emotion tags in square brackets to make the spoken delivery more expressive. Only use tags from this list; never invent a tag that is not on it:
+[happy] [sad] [angry] [excited] [calm] [nervous] [confident] [surprised] [embarrassed] [curious] [sarcastic] [disgusted] [proud] [relaxed] [grateful] [worried] [frustrated] [depressed] [empathetic] [confused] [moved] [satisfied] [delighted] [scared] [upset] [whispering] [soft] [shouting] [screaming] [emphasis] [in a hurry tone] [breathy] [laughing] [chuckling] [sobbing] [crying loudly] [sighing] [groaning] [panting] [clear throat] [cough] [sigh] [breath] [lip-smacking] [break] [long-break] [pause] [long pause] [audience laughing] [background laughter] [crowd laughing]
+Place a tag immediately before the words it should color, and repeat it before each later phrase that needs the same or a different feeling. Use them sparingly and only where the emotion genuinely fits.`;
+
+// src/state.ts
+var SessionStateStore = class {
+  constructor(storage) {
+    this.storage = storage;
+  }
+  storage;
+  pending = /* @__PURE__ */ new Map();
+  async isEnabled(sessionID) {
+    await this.pending.get(sessionID);
+    return await this.storage.get(this.key(sessionID)) === true;
+  }
+  setEnabled(sessionID, enabled) {
+    return this.mutate(sessionID, async () => {
+      if (enabled) {
+        await this.storage.set(this.key(sessionID), true);
+      } else {
+        await this.storage.remove(this.key(sessionID));
+      }
+      return enabled;
+    });
+  }
+  toggle(sessionID) {
+    return this.mutate(sessionID, async () => {
+      const enabled = await this.storage.get(this.key(sessionID)) !== true;
+      if (enabled) {
+        await this.storage.set(this.key(sessionID), true);
+      } else {
+        await this.storage.remove(this.key(sessionID));
+      }
+      return enabled;
+    });
+  }
+  key(sessionID) {
+    return `session/${sessionID}/enabled`;
+  }
+  mutate(sessionID, operation) {
+    const previous = this.pending.get(sessionID) ?? Promise.resolve();
+    const result = previous.then(operation);
+    const tail = result.then(
+      () => void 0,
+      () => void 0
+    );
+    this.pending.set(sessionID, tail);
+    void tail.then(() => {
+      if (this.pending.get(sessionID) === tail) {
+        this.pending.delete(sessionID);
+      }
+    });
+    return result;
+  }
+};
+
+// src/engine.ts
+function storageErrorMessage(error) {
+  return error instanceof Error && error.message ? error.message : "Jarvis storage operation failed";
+}
+async function mapStorageError(operation, error) {
+  try {
+    return await operation();
+  } catch (cause) {
+    return error(storageErrorMessage(cause));
+  }
+}
+async function setupJarvisServer(ctx) {
+  const state = new SessionStateStore(ctx.storage);
+  await ctx.rpc.register(JarvisRpc, {
+    status: async (input, context) => {
+      const { sessionID } = input;
+      return mapStorageError(
+        async () => ({ enabled: await state.isEnabled(sessionID) }),
+        (message) => context.error("storage_error", message, {})
+      );
+    },
+    set: async (input, context) => {
+      const { sessionID, enabled } = input;
+      return mapStorageError(
+        async () => ({ enabled: await state.setEnabled(sessionID, enabled) }),
+        (message) => context.error("storage_error", message, {})
+      );
+    },
+    toggle: async (input, context) => {
+      const { sessionID } = input;
+      return mapStorageError(
+        async () => ({ enabled: await state.toggle(sessionID) }),
+        (message) => context.error("storage_error", message, {})
+      );
+    }
+  });
+  await ctx.session.hook("context", async (event) => {
+    try {
+      if (await state.isEnabled(event.sessionID)) {
+        event.system.push({ type: "text", text: JARVIS_SYSTEM_INSTRUCTION });
+      }
+    } catch {
+    }
+  });
+}
+
+// src/index.ts
+var index_default = Plugin.define({
+  id: "opencode-jarvis",
+  setup: setupJarvisServer
+});
+export {
+  index_default as default
+};
